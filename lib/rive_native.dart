@@ -116,6 +116,14 @@ abstract base class RenderTexturePainter extends RivePainter {
 abstract base class RenderTexture {
   int get textureId;
   dynamic get nativeTexture;
+
+  /// The raw native `MetalTextureRenderer*` pointer.
+  ///
+  /// Valid only when [isReady] is true. Pass to
+  /// [RiveThreadedBindings.create] as `metalTextureRenderer` when setting
+  /// up background rendering. Returns `nullptr` on web and headless targets.
+  dynamic get nativeRendererPtr;
+
   Widget widget({RenderTexturePainter? painter, flutter.Key? key});
   void dispose();
 
@@ -148,6 +156,9 @@ final class UnimplementedRenderTexture extends RenderTexture {
   bool clear(Color color, [bool write = true]) {
     return true;
   }
+
+  @override
+  dynamic get nativeRendererPtr => null;
 
   @override
   void dispose() {

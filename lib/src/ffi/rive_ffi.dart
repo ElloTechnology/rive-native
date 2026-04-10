@@ -2742,6 +2742,16 @@ class FFIStateMachine extends StateMachine
     _finalizer.detach(this);
   }
 
+  /// Transfers native ownership of this state machine to C++ (e.g. to
+  /// [riveThreadedCreate]). Detaches the [NativeFinalizer] so Dart will not
+  /// free the object when it is GC-collected. After calling this, the Dart
+  /// object is invalid and must not be used.
+  void releaseNativeOwnership() {
+    if (_pointer == nullptr) return;
+    _finalizer.detach(this);
+    _pointer = nullptr;
+  }
+
   @override
   CallbackHandler onStateChanged(void Function(String stateName) callback) {
     _stateChangedListeners.add(callback);
@@ -3219,6 +3229,16 @@ class FFIRiveArtboard extends Artboard
     _deleteArtboardInstance(_pointer);
     _pointer = nullptr;
     _finalizer.detach(this);
+  }
+
+  /// Transfers native ownership of this artboard to C++ (e.g. to
+  /// [riveThreadedCreate]). Detaches the [NativeFinalizer] so Dart will not
+  /// free the object when it is GC-collected. After calling this, the Dart
+  /// object is invalid and must not be used.
+  void releaseNativeOwnership() {
+    if (_pointer == nullptr) return;
+    _finalizer.detach(this);
+    _pointer = nullptr;
   }
 
   @override
