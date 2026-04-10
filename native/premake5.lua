@@ -271,6 +271,7 @@ do
                 'platform/mac/**.m',
                 'platform/mac/**.mm',
                 'src/pls_binding.mm',
+                'src/threaded_scene_binding.mm',
             })
             links({
                 'Cocoa.framework',
@@ -298,6 +299,7 @@ do
                 'platform/ios/**.m',
                 'platform/ios/**.mm',
                 'src/pls_binding.mm',
+                'src/threaded_scene_binding.mm',
             })
         end
 
