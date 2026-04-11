@@ -21,7 +21,6 @@ export 'src/rive_semantics.dart';
 export 'src/defaults.dart';
 export 'rive_audio.dart' show AudioSource;
 export 'rive_text.dart' show Font;
-export 'src/ffi/rive_threaded_ffi.dart';
 
 /// Base class for a Rive painter.
 ///
