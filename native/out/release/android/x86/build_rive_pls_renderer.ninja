@@ -1,0 +1,65 @@
+# project build file
+# generated with premake ninja
+
+ninja_required_version = 1.6
+
+# core rules for default
+CFLAGS= --sysroot=/Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/sysroot -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -Wshorten-64-to-32 -ffp-contract=on -fassociative-math -Wno-psabi -MD -MP -m32 -Werror -flto -O2 -fPIC -DWITH_RIVE_AUDIO_TOOLS -DRIVE_NO_CORETEXT -DMICROPROFILE_WEBSERVER=0 -DWITH_RIVE_TEXT -DWITH_RIVE_SCRIPTING -DWITH_RIVE_AUDIO -DMA_NO_RESOURCE_MANAGER -DWITH_RIVE_LAYOUT -DRIVE_MICROPROFILE -DRELEASE -DNDEBUG -DRIVE_ANDROID -DRIVE_DECODERS -I../../../../../runtime/dependencies -I../../../../../runtime/scripting -I../../../../../runtime/renderer/include -I../../../../../runtime/renderer/glad -I../../../../../runtime/renderer/src -I../../../../../runtime/include -Iinclude -I../../../../dependencies/aliasbinman_microprofile_rivebuild -I../../../../../runtime/decoders/include -isystem ../../../../../runtime/renderer/glad/include -include rive_png_renames.h -include rive_luau.hpp
+rule cc
+  command = /Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/i686-linux-android21-clang $CFLAGS -MF $out.d -c -o $out $in
+  description = cc $out
+  depfile = $out.d
+  deps = gcc
+
+CXXFLAGS= --sysroot=/Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/sysroot -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -Wshorten-64-to-32 -ffp-contract=on -fassociative-math -Wno-psabi -MD -MP -m32 -Werror -flto -O2 -fPIC -std=c++17 -fno-exceptions -fno-rtti -DWITH_RIVE_AUDIO_TOOLS -DRIVE_NO_CORETEXT -DMICROPROFILE_WEBSERVER=0 -DWITH_RIVE_TEXT -DWITH_RIVE_SCRIPTING -DWITH_RIVE_AUDIO -DMA_NO_RESOURCE_MANAGER -DWITH_RIVE_LAYOUT -DRIVE_MICROPROFILE -DRELEASE -DNDEBUG -DRIVE_ANDROID -DRIVE_DECODERS -I../../../../../runtime/dependencies -I../../../../../runtime/scripting -I../../../../../runtime/renderer/include -I../../../../../runtime/renderer/glad -I../../../../../runtime/renderer/src -I../../../../../runtime/include -Iinclude -I../../../../dependencies/aliasbinman_microprofile_rivebuild -I../../../../../runtime/decoders/include -isystem ../../../../../runtime/renderer/glad/include -include rive_png_renames.h -include rive_luau.hpp
+rule cxx
+  command = /Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/i686-linux-android21-clang++ $CXXFLAGS -MF $out.d -c -o $out $in
+  description = cxx $out
+  depfile = $out.d
+  deps = gcc
+
+RESFLAGS =  -DWITH_RIVE_AUDIO_TOOLS -DRIVE_NO_CORETEXT -DMICROPROFILE_WEBSERVER=0 -DWITH_RIVE_TEXT -DWITH_RIVE_SCRIPTING -DWITH_RIVE_AUDIO -DMA_NO_RESOURCE_MANAGER -DWITH_RIVE_LAYOUT -DRIVE_MICROPROFILE -DRELEASE -DNDEBUG -DRIVE_ANDROID -DRIVE_DECODERS -I../../../../../runtime/renderer/glad/include -I../../../../../runtime/dependencies -I../../../../../runtime/scripting -I../../../../../runtime/renderer/include -I../../../../../runtime/renderer/glad -I../../../../../runtime/renderer/src -I../../../../../runtime/include -Iinclude -I../../../../dependencies/aliasbinman_microprofile_rivebuild -I../../../../../runtime/decoders/include
+rule rc
+  command = windres -i $in -o $out $RESFLAGS
+  description = rc $out
+
+rule ar
+  command = /Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar rcs $out $in
+  description = ar $out
+
+rule copy
+  command = cp -f $in $out
+  description = copy $in $out
+
+rule custom_command
+  command = $CUSTOM_COMMAND
+  description = $CUSTOM_DESCRIPTION
+
+# build files
+build obj/default/rive_pls_renderer/draw.o: cxx ../../../../../runtime/renderer/src/draw.cpp
+build obj/default/rive_pls_renderer/gl_state.o: cxx ../../../../../runtime/renderer/src/gl/gl_state.cpp
+build obj/default/rive_pls_renderer/gl_utils.o: cxx ../../../../../runtime/renderer/src/gl/gl_utils.cpp
+build obj/default/rive_pls_renderer/load_gles_extensions.o: cxx ../../../../../runtime/renderer/src/gl/load_gles_extensions.cpp
+build obj/default/rive_pls_renderer/load_store_actions_ext.o: cxx ../../../../../runtime/renderer/src/gl/load_store_actions_ext.cpp
+build obj/default/rive_pls_renderer/pls_impl_ext_native.o: cxx ../../../../../runtime/renderer/src/gl/pls_impl_ext_native.cpp
+build obj/default/rive_pls_renderer/render_buffer_gl_impl.o: cxx ../../../../../runtime/renderer/src/gl/render_buffer_gl_impl.cpp
+build obj/default/rive_pls_renderer/render_context_gl_impl.o: cxx ../../../../../runtime/renderer/src/gl/render_context_gl_impl.cpp
+build obj/default/rive_pls_renderer/render_target_gl.o: cxx ../../../../../runtime/renderer/src/gl/render_target_gl.cpp
+build obj/default/rive_pls_renderer/gpu.o: cxx ../../../../../runtime/renderer/src/gpu.cpp
+build obj/default/rive_pls_renderer/gpu_resource.o: cxx ../../../../../runtime/renderer/src/gpu_resource.cpp
+build obj/default/rive_pls_renderer/gr_triangulator.o: cxx ../../../../../runtime/renderer/src/gr_triangulator.cpp
+build obj/default/rive_pls_renderer/gradient.o: cxx ../../../../../runtime/renderer/src/gradient.cpp
+build obj/default/rive_pls_renderer/intersection_board.o: cxx ../../../../../runtime/renderer/src/intersection_board.cpp
+build obj/default/rive_pls_renderer/render_context.o: cxx ../../../../../runtime/renderer/src/render_context.cpp
+build obj/default/rive_pls_renderer/render_context_helper_impl.o: cxx ../../../../../runtime/renderer/src/render_context_helper_impl.cpp
+build obj/default/rive_pls_renderer/rive_render_factory.o: cxx ../../../../../runtime/renderer/src/rive_render_factory.cpp
+build obj/default/rive_pls_renderer/rive_render_image.o: cxx ../../../../../runtime/renderer/src/rive_render_image.cpp
+build obj/default/rive_pls_renderer/rive_render_paint.o: cxx ../../../../../runtime/renderer/src/rive_render_paint.cpp
+build obj/default/rive_pls_renderer/rive_render_path.o: cxx ../../../../../runtime/renderer/src/rive_render_path.cpp
+build obj/default/rive_pls_renderer/rive_renderer.o: cxx ../../../../../runtime/renderer/src/rive_renderer.cpp
+build obj/default/rive_pls_renderer/sk_rectanizer_skyline.o: cxx ../../../../../runtime/renderer/src/sk_rectanizer_skyline.cpp
+
+# link static lib
+build ./librive_pls_renderer.a: ar obj/default/rive_pls_renderer/draw.o obj/default/rive_pls_renderer/gl_state.o obj/default/rive_pls_renderer/gl_utils.o obj/default/rive_pls_renderer/load_gles_extensions.o obj/default/rive_pls_renderer/load_store_actions_ext.o obj/default/rive_pls_renderer/pls_impl_ext_native.o obj/default/rive_pls_renderer/render_buffer_gl_impl.o obj/default/rive_pls_renderer/render_context_gl_impl.o obj/default/rive_pls_renderer/render_target_gl.o obj/default/rive_pls_renderer/gpu.o obj/default/rive_pls_renderer/gpu_resource.o obj/default/rive_pls_renderer/gr_triangulator.o obj/default/rive_pls_renderer/gradient.o obj/default/rive_pls_renderer/intersection_board.o obj/default/rive_pls_renderer/render_context.o obj/default/rive_pls_renderer/render_context_helper_impl.o obj/default/rive_pls_renderer/rive_render_factory.o obj/default/rive_pls_renderer/rive_render_image.o obj/default/rive_pls_renderer/rive_render_paint.o obj/default/rive_pls_renderer/rive_render_path.o obj/default/rive_pls_renderer/rive_renderer.o obj/default/rive_pls_renderer/sk_rectanizer_skyline.o
+
+build rive_pls_renderer: phony ./librive_pls_renderer.a

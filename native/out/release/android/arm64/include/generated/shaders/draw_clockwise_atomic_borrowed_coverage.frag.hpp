@@ -1,0 +1,26 @@
+#pragma once
+
+#include "draw_clockwise_atomic_borrowed_coverage.frag.exports.h"
+
+namespace rive {
+namespace gpu {
+namespace glsl {
+const char draw_clockwise_atomic_borrowed_coverage_frag[] = R"===(#ifdef EB
+K3 Fa(ha,Vd,S0);L3 void main(){
+#ifdef CB
+Y(l1,d);
+#else
+Y(I,z2);
+#endif
+B(Z2,W0);B(g4,c);d q0=
+#ifdef CB
+l1;
+#else
+Ya(I);
+#endif
+W0 x6=W0(floor(g4));uint L7=Z2.y;uint T1=Z2.x+za(x6,L7);uint Wd=p7(abs(q0));uint M7=k.W1|(h5-Wd);uint a3=y7(S0,T1,M7);if(a3>=k.W1){uint oh=a3-max(a3,M7);Ga(S0,T1,oh-Wd);}}
+#endif
+)===";
+} // namespace glsl
+} // namespace gpu
+} // namespace rive

@@ -1,0 +1,54 @@
+# project build file
+# generated with premake ninja
+
+ninja_required_version = 1.6
+
+# core rules for default
+CFLAGS= --sysroot=/Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/sysroot -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -MD -MP -flto -O2 -fPIC -w -DWITH_RIVE_AUDIO_TOOLS -DRIVE_NO_CORETEXT -DMICROPROFILE_WEBSERVER=0 -DWITH_RIVE_TEXT -DWITH_RIVE_SCRIPTING -DWITH_RIVE_AUDIO -DMA_NO_RESOURCE_MANAGER -DWITH_RIVE_LAYOUT -DRIVE_MICROPROFILE -DRELEASE -DNDEBUG -DRIVE_ANDROID -DYOGA_EXPORT= -I../../../../../runtime/scripting -I../../../../dependencies/rive-app_yoga_rive_changes_v2_0_1_2 -I../../../../../runtime/dependencies -include rive_png_renames.h -include rive_luau.hpp -include rive_yoga_renames.h
+rule cc
+  command = /Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang $CFLAGS -MF $out.d -c -o $out $in
+  description = cc $out
+  depfile = $out.d
+  deps = gcc
+
+CXXFLAGS= --sysroot=/Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/sysroot -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -MD -MP -flto -O2 -fPIC -w -std=c++17 -fno-exceptions -fno-rtti -DWITH_RIVE_AUDIO_TOOLS -DRIVE_NO_CORETEXT -DMICROPROFILE_WEBSERVER=0 -DWITH_RIVE_TEXT -DWITH_RIVE_SCRIPTING -DWITH_RIVE_AUDIO -DMA_NO_RESOURCE_MANAGER -DWITH_RIVE_LAYOUT -DRIVE_MICROPROFILE -DRELEASE -DNDEBUG -DRIVE_ANDROID -DYOGA_EXPORT= -I../../../../../runtime/scripting -I../../../../dependencies/rive-app_yoga_rive_changes_v2_0_1_2 -I../../../../../runtime/dependencies -include rive_png_renames.h -include rive_luau.hpp -include rive_yoga_renames.h
+rule cxx
+  command = /Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang++ $CXXFLAGS -MF $out.d -c -o $out $in
+  description = cxx $out
+  depfile = $out.d
+  deps = gcc
+
+RESFLAGS =  -DWITH_RIVE_AUDIO_TOOLS -DRIVE_NO_CORETEXT -DMICROPROFILE_WEBSERVER=0 -DWITH_RIVE_TEXT -DWITH_RIVE_SCRIPTING -DWITH_RIVE_AUDIO -DMA_NO_RESOURCE_MANAGER -DWITH_RIVE_LAYOUT -DRIVE_MICROPROFILE -DRELEASE -DNDEBUG -DRIVE_ANDROID -DYOGA_EXPORT= -I../../../../../runtime/scripting -I../../../../dependencies/rive-app_yoga_rive_changes_v2_0_1_2 -I../../../../../runtime/dependencies
+rule rc
+  command = windres -i $in -o $out $RESFLAGS
+  description = rc $out
+
+rule ar
+  command = /Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar rcs $out $in
+  description = ar $out
+
+rule copy
+  command = cp -f $in $out
+  description = copy $in $out
+
+rule custom_command
+  command = $CUSTOM_COMMAND
+  description = $CUSTOM_DESCRIPTION
+
+# build files
+build obj/default/rive_yoga/Utils.o: cxx ../../../../dependencies/rive-app_yoga_rive_changes_v2_0_1_2/yoga/Utils.cpp
+build obj/default/rive_yoga/YGConfig.o: cxx ../../../../dependencies/rive-app_yoga_rive_changes_v2_0_1_2/yoga/YGConfig.cpp
+build obj/default/rive_yoga/YGEnums.o: cxx ../../../../dependencies/rive-app_yoga_rive_changes_v2_0_1_2/yoga/YGEnums.cpp
+build obj/default/rive_yoga/YGLayout.o: cxx ../../../../dependencies/rive-app_yoga_rive_changes_v2_0_1_2/yoga/YGLayout.cpp
+build obj/default/rive_yoga/YGNode.o: cxx ../../../../dependencies/rive-app_yoga_rive_changes_v2_0_1_2/yoga/YGNode.cpp
+build obj/default/rive_yoga/YGNodePrint.o: cxx ../../../../dependencies/rive-app_yoga_rive_changes_v2_0_1_2/yoga/YGNodePrint.cpp
+build obj/default/rive_yoga/YGStyle.o: cxx ../../../../dependencies/rive-app_yoga_rive_changes_v2_0_1_2/yoga/YGStyle.cpp
+build obj/default/rive_yoga/YGValue.o: cxx ../../../../dependencies/rive-app_yoga_rive_changes_v2_0_1_2/yoga/YGValue.cpp
+build obj/default/rive_yoga/Yoga.o: cxx ../../../../dependencies/rive-app_yoga_rive_changes_v2_0_1_2/yoga/Yoga.cpp
+build obj/default/rive_yoga/event.o: cxx ../../../../dependencies/rive-app_yoga_rive_changes_v2_0_1_2/yoga/event/event.cpp
+build obj/default/rive_yoga/log.o: cxx ../../../../dependencies/rive-app_yoga_rive_changes_v2_0_1_2/yoga/log.cpp
+
+# link static lib
+build ./librive_yoga.a: ar obj/default/rive_yoga/Utils.o obj/default/rive_yoga/YGConfig.o obj/default/rive_yoga/YGEnums.o obj/default/rive_yoga/YGLayout.o obj/default/rive_yoga/YGNode.o obj/default/rive_yoga/YGNodePrint.o obj/default/rive_yoga/YGStyle.o obj/default/rive_yoga/YGValue.o obj/default/rive_yoga/Yoga.o obj/default/rive_yoga/event.o obj/default/rive_yoga/log.o
+
+build rive_yoga: phony ./librive_yoga.a

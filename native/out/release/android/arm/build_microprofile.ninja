@@ -1,0 +1,44 @@
+# project build file
+# generated with premake ninja
+
+ninja_required_version = 1.6
+
+# core rules for default
+CFLAGS= --sysroot=/Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/sysroot -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -MD -MP -flto -O2 -fPIC -DWITH_RIVE_AUDIO_TOOLS -DRIVE_NO_CORETEXT -DMICROPROFILE_WEBSERVER=0 -DWITH_RIVE_TEXT -DWITH_RIVE_SCRIPTING -DWITH_RIVE_AUDIO -DMA_NO_RESOURCE_MANAGER -DWITH_RIVE_LAYOUT -DRIVE_MICROPROFILE -DRELEASE -DNDEBUG -DRIVE_ANDROID -I../../../../../runtime/dependencies -I../../../../../runtime/scripting -I../../../../dependencies/aliasbinman_microprofile_rivebuild -include rive_png_renames.h -include rive_luau.hpp
+rule cc
+  command = /Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/armv7a-linux-androideabi21-clang $CFLAGS -MF $out.d -c -o $out $in
+  description = cc $out
+  depfile = $out.d
+  deps = gcc
+
+CXXFLAGS= --sysroot=/Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/sysroot -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -MD -MP -flto -O2 -fPIC -std=c++11 -fno-exceptions -fno-rtti -DWITH_RIVE_AUDIO_TOOLS -DRIVE_NO_CORETEXT -DMICROPROFILE_WEBSERVER=0 -DWITH_RIVE_TEXT -DWITH_RIVE_SCRIPTING -DWITH_RIVE_AUDIO -DMA_NO_RESOURCE_MANAGER -DWITH_RIVE_LAYOUT -DRIVE_MICROPROFILE -DRELEASE -DNDEBUG -DRIVE_ANDROID -I../../../../../runtime/dependencies -I../../../../../runtime/scripting -I../../../../dependencies/aliasbinman_microprofile_rivebuild -include rive_png_renames.h -include rive_luau.hpp
+rule cxx
+  command = /Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/armv7a-linux-androideabi21-clang++ $CXXFLAGS -MF $out.d -c -o $out $in
+  description = cxx $out
+  depfile = $out.d
+  deps = gcc
+
+RESFLAGS =  -DWITH_RIVE_AUDIO_TOOLS -DRIVE_NO_CORETEXT -DMICROPROFILE_WEBSERVER=0 -DWITH_RIVE_TEXT -DWITH_RIVE_SCRIPTING -DWITH_RIVE_AUDIO -DMA_NO_RESOURCE_MANAGER -DWITH_RIVE_LAYOUT -DRIVE_MICROPROFILE -DRELEASE -DNDEBUG -DRIVE_ANDROID -I../../../../../runtime/dependencies -I../../../../../runtime/scripting -I../../../../dependencies/aliasbinman_microprofile_rivebuild
+rule rc
+  command = windres -i $in -o $out $RESFLAGS
+  description = rc $out
+
+rule ar
+  command = /Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar rcs $out $in
+  description = ar $out
+
+rule copy
+  command = cp -f $in $out
+  description = copy $in $out
+
+rule custom_command
+  command = $CUSTOM_COMMAND
+  description = $CUSTOM_DESCRIPTION
+
+# build files
+build obj/default/microprofile/embed.o: cc ../../../../dependencies/aliasbinman_microprofile_rivebuild/src/embed.c
+
+# link static lib
+build ./libmicroprofile.a: ar obj/default/microprofile/embed.o
+
+build microprofile: phony ./libmicroprofile.a
