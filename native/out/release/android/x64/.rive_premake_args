@@ -1,0 +1,1 @@
+ninja --config=release --out=out/release/android/x64 --with_rive_text --with_rive_layout --with_microprofile --with_rive_scripting --with_rive_text --with_rive_layout --with_rive_audio=system --variant=system --flutter_runtime --shared --for_android --arch=x64

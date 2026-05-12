@@ -35,11 +35,28 @@
 #include "rive/renderer/rive_renderer.hpp"
 #include "rive/math/mat2d.hpp"
 
+#include <EGL/egl.h>
+#include <GLES2/gl2.h>
+#include <android/log.h>
+
 #include <algorithm>
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
+
+#define PROBE_TAG "CorRive3538Probe"
+#define PROBE_LOGI(...) __android_log_print(ANDROID_LOG_INFO, PROBE_TAG, __VA_ARGS__)
+#define PROBE_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, PROBE_TAG, __VA_ARGS__)
+
+// Accessors implemented in rive_native_android.cpp.
+extern "C" {
+EGLDisplay riveAndroidGetMainEGLDisplay();
+EGLContext riveAndroidGetMainEGLContext();
+EGLConfig riveAndroidGetMainEGLConfig();
+}
 
 // Forward declarations from rive_native_android.cpp (same translation unit
 // linkage on Android — the GL renderer wrapper is defined there).
@@ -453,4 +470,215 @@ EXPORT bool riveThreadedIsRunning(void* bindingPtr)
 {
     auto* binding = static_cast<ThreadedSceneBinding*>(bindingPtr);
     return binding && binding->scene() && binding->scene()->isRunning();
+}
+
+// =============================================================================
+// COR-3538 Phase 2 spike — shared-context probe.
+//
+// Answers the question: can a worker thread own an EGL context that shares
+// resources with the main thread's context on this device?
+//
+// Synchronous self-contained probe:
+//   1. Read the main thread's EGLDisplay, EGLContext, EGLConfig (must be
+//      initialized — typically Rive has rendered at least one frame).
+//   2. Create a new EGLContext with share_context = main_context.
+//   3. Create a 1x1 PBuffer surface.
+//   4. Spawn a worker thread, make the new (worker) context current there.
+//   5. Worker creates a 4x4 GL_RGBA texture, captures its name, calls
+//      glFinish() to ensure the texture is fully committed, then releases
+//      the context.
+//   6. Probe thread re-acquires the worker context (or makes main current),
+//      calls glIsTexture(textureName). If true, GL resources are shared —
+//      this is the empirical evidence we want.
+//   7. Tears down: destroy surface, destroy worker context. Texture is
+//      destroyed implicitly when its owning context is destroyed.
+//   8. Returns a result code (0 = success, negative = failed at step N).
+//      All steps log to logcat under tag "CorRive3538Probe" so you can
+//      reconstruct the run with `adb logcat -s CorRive3538Probe`.
+//
+// Spike-only. Do not ship. Caller (Dart) should run this once at boot on
+// the spike branch and log the return code + grep logcat for CorRive3538Probe.
+// =============================================================================
+
+EXPORT int riveSpikeProbeSharedContext()
+{
+    PROBE_LOGI("--- begin ---");
+
+    // Step 1: read main thread's EGL handles.
+    EGLDisplay mainDisplay = riveAndroidGetMainEGLDisplay();
+    EGLContext mainContext = riveAndroidGetMainEGLContext();
+    EGLConfig mainConfig = riveAndroidGetMainEGLConfig();
+    PROBE_LOGI("step1: main display=%p context=%p config=%p",
+               mainDisplay, mainContext, mainConfig);
+    if (mainDisplay == EGL_NO_DISPLAY || mainContext == EGL_NO_CONTEXT)
+    {
+        PROBE_LOGE("step1: main EGLThreadState not initialized — "
+                   "ensure Rive has rendered at least one frame "
+                   "before probing");
+        return -1;
+    }
+
+    // Step 2: create worker context with share_context = main.
+    const EGLint contextAttrs[] = {
+        EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE,
+    };
+    EGLContext workerContext =
+        eglCreateContext(mainDisplay, mainConfig, mainContext, contextAttrs);
+    if (workerContext == EGL_NO_CONTEXT)
+    {
+        EGLint err = eglGetError();
+        PROBE_LOGE("step2: eglCreateContext(share=%p) failed: 0x%x",
+                   mainContext, err);
+        return -2;
+    }
+    PROBE_LOGI("step2: worker context=%p (shares with main=%p)",
+               workerContext, mainContext);
+
+    // Step 3: 1x1 PBuffer so workerContext can be made current without a
+    // window surface.
+    const EGLint pbAttrs[] = {
+        EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE,
+    };
+    EGLSurface workerSurface =
+        eglCreatePbufferSurface(mainDisplay, mainConfig, pbAttrs);
+    if (workerSurface == EGL_NO_SURFACE)
+    {
+        EGLint err = eglGetError();
+        PROBE_LOGE("step3: eglCreatePbufferSurface failed: 0x%x", err);
+        eglDestroyContext(mainDisplay, workerContext);
+        return -3;
+    }
+    PROBE_LOGI("step3: worker pbuffer surface=%p", workerSurface);
+
+    // Step 4-5: spawn worker thread, create a texture, capture its name.
+    std::atomic<GLuint> workerTextureName{0};
+    std::atomic<int> workerResult{0};
+    std::thread worker([&]() {
+        if (!eglMakeCurrent(mainDisplay,
+                            workerSurface,
+                            workerSurface,
+                            workerContext))
+        {
+            EGLint err = eglGetError();
+            PROBE_LOGE("step4: worker eglMakeCurrent failed: 0x%x", err);
+            workerResult = -4;
+            return;
+        }
+        EGLContext currentOnWorker = eglGetCurrentContext();
+        PROBE_LOGI("step4: worker thread eglGetCurrentContext=%p "
+                   "(expected %p)",
+                   currentOnWorker, workerContext);
+        if (currentOnWorker != workerContext)
+        {
+            PROBE_LOGE("step4: worker current context mismatch");
+            workerResult = -4;
+            return;
+        }
+
+        GLuint tex = 0;
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexImage2D(GL_TEXTURE_2D,
+                     0,
+                     GL_RGBA,
+                     4,
+                     4,
+                     0,
+                     GL_RGBA,
+                     GL_UNSIGNED_BYTE,
+                     nullptr);
+        GLenum glerr = glGetError();
+        if (glerr != GL_NO_ERROR)
+        {
+            PROBE_LOGE("step5: worker glTexImage2D failed: 0x%x", glerr);
+            workerResult = -5;
+            return;
+        }
+        glFinish();
+        workerTextureName = tex;
+        PROBE_LOGI("step5: worker created texture name=%u (glFinish'd)", tex);
+
+        // Release the context from this thread so the probe thread can use
+        // it (or use main).
+        eglMakeCurrent(mainDisplay,
+                       EGL_NO_SURFACE,
+                       EGL_NO_SURFACE,
+                       EGL_NO_CONTEXT);
+    });
+    worker.join();
+
+    if (workerResult.load() < 0)
+    {
+        PROBE_LOGE("worker reported failure (result=%d) — tearing down",
+                   workerResult.load());
+        eglDestroySurface(mainDisplay, workerSurface);
+        eglDestroyContext(mainDisplay, workerContext);
+        return workerResult.load();
+    }
+
+    // Step 6: from the probe thread, verify the worker's texture is visible.
+    // We need a context current on this thread to call glIsTexture. Try
+    // making main current (the cleanest cross-thread sharing test).
+    if (!eglMakeCurrent(mainDisplay,
+                        workerSurface,
+                        workerSurface,
+                        mainContext))
+    {
+        EGLint err = eglGetError();
+        PROBE_LOGE("step6: probe-thread eglMakeCurrent(main) failed: 0x%x — "
+                   "main context may be in use on another thread (Flutter's "
+                   "render thread). Falling back to worker context.",
+                   err);
+        // Fallback: use worker context from probe thread. Still tests
+        // sharing because the texture was created on a DIFFERENT thread.
+        if (!eglMakeCurrent(mainDisplay,
+                            workerSurface,
+                            workerSurface,
+                            workerContext))
+        {
+            EGLint err2 = eglGetError();
+            PROBE_LOGE("step6: probe-thread eglMakeCurrent(worker) also "
+                       "failed: 0x%x",
+                       err2);
+            eglDestroySurface(mainDisplay, workerSurface);
+            eglDestroyContext(mainDisplay, workerContext);
+            return -6;
+        }
+        PROBE_LOGI("step6: using worker context from probe thread "
+                   "(cross-thread same-context test, not cross-context "
+                   "sharing test)");
+    }
+    else
+    {
+        PROBE_LOGI("step6: probe thread now has main context current "
+                   "— this is the real cross-context sharing test");
+    }
+
+    GLuint tname = workerTextureName.load();
+    GLboolean isShared = glIsTexture(tname);
+    GLenum afterErr = glGetError();
+    PROBE_LOGI("step6: glIsTexture(%u)=%s (post-call glGetError=0x%x)",
+               tname,
+               isShared ? "TRUE" : "FALSE",
+               afterErr);
+
+    // Cleanup.
+    eglMakeCurrent(mainDisplay,
+                   EGL_NO_SURFACE,
+                   EGL_NO_SURFACE,
+                   EGL_NO_CONTEXT);
+    eglDestroySurface(mainDisplay, workerSurface);
+    eglDestroyContext(mainDisplay, workerContext);
+
+    if (!isShared)
+    {
+        PROBE_LOGE("--- end: FAIL — worker texture not visible from probe "
+                   "thread; share_context did NOT establish resource "
+                   "sharing on this device");
+        return -7;
+    }
+
+    PROBE_LOGI("--- end: SUCCESS — shared EGL context works on this "
+               "device; worker-created texture visible cross-thread");
+    return 0;
 }

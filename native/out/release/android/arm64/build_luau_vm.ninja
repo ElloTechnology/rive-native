@@ -1,0 +1,77 @@
+# project build file
+# generated with premake ninja
+
+ninja_required_version = 1.6
+
+# core rules for default
+CFLAGS= --sysroot=/Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/sysroot -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -MD -MP -flto -Os -fPIC -DWITH_RIVE_AUDIO_TOOLS -DRIVE_NO_CORETEXT -DMICROPROFILE_WEBSERVER=0 -DWITH_RIVE_TEXT -DWITH_RIVE_SCRIPTING -DWITH_RIVE_AUDIO -DMA_NO_RESOURCE_MANAGER -DWITH_RIVE_LAYOUT -DRIVE_MICROPROFILE -DRELEASE -DNDEBUG -DRIVE_ANDROID -DLUA_USE_LONGJMP -DRIVE_LUAU -I../../../../../runtime/dependencies -I../../../../../runtime/scripting -I../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/include -I../../../../dependencies/luigi-rosso_luau_rive_0_33/Common/include -include rive_png_renames.h -include rive_luau.hpp
+rule cc
+  command = /Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang $CFLAGS -MF $out.d -c -o $out $in
+  description = cc $out
+  depfile = $out.d
+  deps = gcc
+
+CXXFLAGS= --sysroot=/Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/sysroot -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -MD -MP -flto -Os -fPIC -std=c++17 -fno-exceptions -fno-rtti -DWITH_RIVE_AUDIO_TOOLS -DRIVE_NO_CORETEXT -DMICROPROFILE_WEBSERVER=0 -DWITH_RIVE_TEXT -DWITH_RIVE_SCRIPTING -DWITH_RIVE_AUDIO -DMA_NO_RESOURCE_MANAGER -DWITH_RIVE_LAYOUT -DRIVE_MICROPROFILE -DRELEASE -DNDEBUG -DRIVE_ANDROID -DLUA_USE_LONGJMP -DRIVE_LUAU -I../../../../../runtime/dependencies -I../../../../../runtime/scripting -I../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/include -I../../../../dependencies/luigi-rosso_luau_rive_0_33/Common/include -include rive_png_renames.h -include rive_luau.hpp
+rule cxx
+  command = /Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang++ $CXXFLAGS -MF $out.d -c -o $out $in
+  description = cxx $out
+  depfile = $out.d
+  deps = gcc
+
+RESFLAGS =  -DWITH_RIVE_AUDIO_TOOLS -DRIVE_NO_CORETEXT -DMICROPROFILE_WEBSERVER=0 -DWITH_RIVE_TEXT -DWITH_RIVE_SCRIPTING -DWITH_RIVE_AUDIO -DMA_NO_RESOURCE_MANAGER -DWITH_RIVE_LAYOUT -DRIVE_MICROPROFILE -DRELEASE -DNDEBUG -DRIVE_ANDROID -DLUA_USE_LONGJMP -DRIVE_LUAU -I../../../../../runtime/dependencies -I../../../../../runtime/scripting -I../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/include -I../../../../dependencies/luigi-rosso_luau_rive_0_33/Common/include
+rule rc
+  command = windres -i $in -o $out $RESFLAGS
+  description = rc $out
+
+rule ar
+  command = /Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar rcs $out $in
+  description = ar $out
+
+rule copy
+  command = cp -f $in $out
+  description = copy $in $out
+
+rule custom_command
+  command = $CUSTOM_COMMAND
+  description = $CUSTOM_DESCRIPTION
+
+# build files
+build obj/default/luau_vm/lapi.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lapi.cpp
+build obj/default/luau_vm/laux.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/laux.cpp
+build obj/default/luau_vm/lbaselib.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lbaselib.cpp
+build obj/default/luau_vm/lbitlib.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lbitlib.cpp
+build obj/default/luau_vm/lbuffer.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lbuffer.cpp
+build obj/default/luau_vm/lbuflib.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lbuflib.cpp
+build obj/default/luau_vm/lbuiltins.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lbuiltins.cpp
+build obj/default/luau_vm/lcorolib.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lcorolib.cpp
+build obj/default/luau_vm/ldblib.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/ldblib.cpp
+build obj/default/luau_vm/ldebug.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/ldebug.cpp
+build obj/default/luau_vm/ldo.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/ldo.cpp
+build obj/default/luau_vm/lfunc.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lfunc.cpp
+build obj/default/luau_vm/lgc.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lgc.cpp
+build obj/default/luau_vm/lgcdebug.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lgcdebug.cpp
+build obj/default/luau_vm/linit.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/linit.cpp
+build obj/default/luau_vm/lmathlib.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lmathlib.cpp
+build obj/default/luau_vm/lmem.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lmem.cpp
+build obj/default/luau_vm/lnumprint.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lnumprint.cpp
+build obj/default/luau_vm/lobject.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lobject.cpp
+build obj/default/luau_vm/loslib.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/loslib.cpp
+build obj/default/luau_vm/lperf.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lperf.cpp
+build obj/default/luau_vm/lstate.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lstate.cpp
+build obj/default/luau_vm/lstring.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lstring.cpp
+build obj/default/luau_vm/lstrlib.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lstrlib.cpp
+build obj/default/luau_vm/ltable.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/ltable.cpp
+build obj/default/luau_vm/ltablib.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/ltablib.cpp
+build obj/default/luau_vm/ltm.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/ltm.cpp
+build obj/default/luau_vm/ludata.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/ludata.cpp
+build obj/default/luau_vm/lutf8lib.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lutf8lib.cpp
+build obj/default/luau_vm/lveclib.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lveclib.cpp
+build obj/default/luau_vm/lvmexecute.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lvmexecute.cpp
+build obj/default/luau_vm/lvmload.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lvmload.cpp
+build obj/default/luau_vm/lvmutils.o: cxx ../../../../dependencies/luigi-rosso_luau_rive_0_33/VM/src/lvmutils.cpp
+build obj/default/luau_vm/dummy.o: cxx ../../../../dummy.cpp
+
+# link static lib
+build ./libluau_vm.a: ar obj/default/luau_vm/lapi.o obj/default/luau_vm/laux.o obj/default/luau_vm/lbaselib.o obj/default/luau_vm/lbitlib.o obj/default/luau_vm/lbuffer.o obj/default/luau_vm/lbuflib.o obj/default/luau_vm/lbuiltins.o obj/default/luau_vm/lcorolib.o obj/default/luau_vm/ldblib.o obj/default/luau_vm/ldebug.o obj/default/luau_vm/ldo.o obj/default/luau_vm/lfunc.o obj/default/luau_vm/lgc.o obj/default/luau_vm/lgcdebug.o obj/default/luau_vm/linit.o obj/default/luau_vm/lmathlib.o obj/default/luau_vm/lmem.o obj/default/luau_vm/lnumprint.o obj/default/luau_vm/lobject.o obj/default/luau_vm/loslib.o obj/default/luau_vm/lperf.o obj/default/luau_vm/lstate.o obj/default/luau_vm/lstring.o obj/default/luau_vm/lstrlib.o obj/default/luau_vm/ltable.o obj/default/luau_vm/ltablib.o obj/default/luau_vm/ltm.o obj/default/luau_vm/ludata.o obj/default/luau_vm/lutf8lib.o obj/default/luau_vm/lveclib.o obj/default/luau_vm/lvmexecute.o obj/default/luau_vm/lvmload.o obj/default/luau_vm/lvmutils.o obj/default/luau_vm/dummy.o
+
+build luau_vm: phony ./libluau_vm.a

@@ -1,0 +1,132 @@
+# project build file
+# generated with premake ninja
+
+ninja_required_version = 1.6
+
+# core rules for default
+CFLAGS= --sysroot=/Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/sysroot -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -MD -MP -flto -O3 -fPIC -DWITH_RIVE_AUDIO_TOOLS -DRIVE_NO_CORETEXT -DMICROPROFILE_WEBSERVER=0 -DWITH_RIVE_TEXT -DWITH_RIVE_SCRIPTING -DWITH_RIVE_AUDIO -DMA_NO_RESOURCE_MANAGER -DWITH_RIVE_LAYOUT -DRIVE_MICROPROFILE -DRELEASE -DNDEBUG -DRIVE_ANDROID -I../../../../../runtime/dependencies -I../../../../../runtime/scripting -I../../../../dependencies/webmproject_libwebp_v1.4.0 -include rive_png_renames.h -include rive_luau.hpp
+rule cc
+  command = /Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/x86_64-linux-android21-clang $CFLAGS -MF $out.d -c -o $out $in
+  description = cc $out
+  depfile = $out.d
+  deps = gcc
+
+CXXFLAGS= --sysroot=/Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/sysroot -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -MD -MP -flto -O3 -fPIC -std=c++17 -fno-exceptions -fno-rtti -DWITH_RIVE_AUDIO_TOOLS -DRIVE_NO_CORETEXT -DMICROPROFILE_WEBSERVER=0 -DWITH_RIVE_TEXT -DWITH_RIVE_SCRIPTING -DWITH_RIVE_AUDIO -DMA_NO_RESOURCE_MANAGER -DWITH_RIVE_LAYOUT -DRIVE_MICROPROFILE -DRELEASE -DNDEBUG -DRIVE_ANDROID -I../../../../../runtime/dependencies -I../../../../../runtime/scripting -I../../../../dependencies/webmproject_libwebp_v1.4.0 -include rive_png_renames.h -include rive_luau.hpp
+rule cxx
+  command = /Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/x86_64-linux-android21-clang++ $CXXFLAGS -MF $out.d -c -o $out $in
+  description = cxx $out
+  depfile = $out.d
+  deps = gcc
+
+RESFLAGS =  -DWITH_RIVE_AUDIO_TOOLS -DRIVE_NO_CORETEXT -DMICROPROFILE_WEBSERVER=0 -DWITH_RIVE_TEXT -DWITH_RIVE_SCRIPTING -DWITH_RIVE_AUDIO -DMA_NO_RESOURCE_MANAGER -DWITH_RIVE_LAYOUT -DRIVE_MICROPROFILE -DRELEASE -DNDEBUG -DRIVE_ANDROID -I../../../../../runtime/dependencies -I../../../../../runtime/scripting -I../../../../dependencies/webmproject_libwebp_v1.4.0
+rule rc
+  command = windres -i $in -o $out $RESFLAGS
+  description = rc $out
+
+rule ar
+  command = /Users/tamir/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar rcs $out $in
+  description = ar $out
+
+rule copy
+  command = cp -f $in $out
+  description = copy $in $out
+
+rule custom_command
+  command = $CUSTOM_COMMAND
+  description = $CUSTOM_DESCRIPTION
+
+# build files
+build obj/default/libwebp/alpha_dec.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dec/alpha_dec.c
+build obj/default/libwebp/buffer_dec.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dec/buffer_dec.c
+build obj/default/libwebp/frame_dec.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dec/frame_dec.c
+build obj/default/libwebp/idec_dec.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dec/idec_dec.c
+build obj/default/libwebp/io_dec.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dec/io_dec.c
+build obj/default/libwebp/quant_dec.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dec/quant_dec.c
+build obj/default/libwebp/tree_dec.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dec/tree_dec.c
+build obj/default/libwebp/vp8_dec.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dec/vp8_dec.c
+build obj/default/libwebp/vp8l_dec.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dec/vp8l_dec.c
+build obj/default/libwebp/webp_dec.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dec/webp_dec.c
+build obj/default/libwebp/anim_decode.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/demux/anim_decode.c
+build obj/default/libwebp/demux.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/demux/demux.c
+build obj/default/libwebp/alpha_processing.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/alpha_processing.c
+build obj/default/libwebp/alpha_processing_mips_dsp_r2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/alpha_processing_mips_dsp_r2.c
+build obj/default/libwebp/alpha_processing_neon.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/alpha_processing_neon.c
+build obj/default/libwebp/alpha_processing_sse2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/alpha_processing_sse2.c
+build obj/default/libwebp/alpha_processing_sse41.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/alpha_processing_sse41.c
+build obj/default/libwebp/cost.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/cost.c
+build obj/default/libwebp/cost_mips32.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/cost_mips32.c
+build obj/default/libwebp/cost_mips_dsp_r2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/cost_mips_dsp_r2.c
+build obj/default/libwebp/cost_neon.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/cost_neon.c
+build obj/default/libwebp/cost_sse2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/cost_sse2.c
+build obj/default/libwebp/cpu.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/cpu.c
+build obj/default/libwebp/dec.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/dec.c
+build obj/default/libwebp/dec_clip_tables.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/dec_clip_tables.c
+build obj/default/libwebp/dec_mips32.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/dec_mips32.c
+build obj/default/libwebp/dec_mips_dsp_r2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/dec_mips_dsp_r2.c
+build obj/default/libwebp/dec_msa.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/dec_msa.c
+build obj/default/libwebp/dec_neon.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/dec_neon.c
+build obj/default/libwebp/dec_sse2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/dec_sse2.c
+build obj/default/libwebp/dec_sse41.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/dec_sse41.c
+build obj/default/libwebp/enc.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/enc.c
+build obj/default/libwebp/enc_mips32.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/enc_mips32.c
+build obj/default/libwebp/enc_mips_dsp_r2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/enc_mips_dsp_r2.c
+build obj/default/libwebp/enc_msa.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/enc_msa.c
+build obj/default/libwebp/enc_neon.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/enc_neon.c
+build obj/default/libwebp/enc_sse2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/enc_sse2.c
+build obj/default/libwebp/enc_sse41.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/enc_sse41.c
+build obj/default/libwebp/filters.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/filters.c
+build obj/default/libwebp/filters_mips_dsp_r2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/filters_mips_dsp_r2.c
+build obj/default/libwebp/filters_msa.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/filters_msa.c
+build obj/default/libwebp/filters_neon.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/filters_neon.c
+build obj/default/libwebp/filters_sse2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/filters_sse2.c
+build obj/default/libwebp/lossless.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/lossless.c
+build obj/default/libwebp/lossless_enc.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/lossless_enc.c
+build obj/default/libwebp/lossless_enc_mips32.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/lossless_enc_mips32.c
+build obj/default/libwebp/lossless_enc_mips_dsp_r2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/lossless_enc_mips_dsp_r2.c
+build obj/default/libwebp/lossless_enc_msa.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/lossless_enc_msa.c
+build obj/default/libwebp/lossless_enc_neon.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/lossless_enc_neon.c
+build obj/default/libwebp/lossless_enc_sse2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/lossless_enc_sse2.c
+build obj/default/libwebp/lossless_enc_sse41.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/lossless_enc_sse41.c
+build obj/default/libwebp/lossless_mips_dsp_r2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/lossless_mips_dsp_r2.c
+build obj/default/libwebp/lossless_msa.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/lossless_msa.c
+build obj/default/libwebp/lossless_neon.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/lossless_neon.c
+build obj/default/libwebp/lossless_sse2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/lossless_sse2.c
+build obj/default/libwebp/lossless_sse41.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/lossless_sse41.c
+build obj/default/libwebp/rescaler.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/rescaler.c
+build obj/default/libwebp/rescaler_mips32.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/rescaler_mips32.c
+build obj/default/libwebp/rescaler_mips_dsp_r2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/rescaler_mips_dsp_r2.c
+build obj/default/libwebp/rescaler_msa.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/rescaler_msa.c
+build obj/default/libwebp/rescaler_neon.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/rescaler_neon.c
+build obj/default/libwebp/rescaler_sse2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/rescaler_sse2.c
+build obj/default/libwebp/ssim.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/ssim.c
+build obj/default/libwebp/ssim_sse2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/ssim_sse2.c
+build obj/default/libwebp/upsampling.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/upsampling.c
+build obj/default/libwebp/upsampling_mips_dsp_r2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/upsampling_mips_dsp_r2.c
+build obj/default/libwebp/upsampling_msa.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/upsampling_msa.c
+build obj/default/libwebp/upsampling_neon.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/upsampling_neon.c
+build obj/default/libwebp/upsampling_sse2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/upsampling_sse2.c
+build obj/default/libwebp/upsampling_sse41.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/upsampling_sse41.c
+build obj/default/libwebp/yuv.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/yuv.c
+build obj/default/libwebp/yuv_mips32.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/yuv_mips32.c
+build obj/default/libwebp/yuv_mips_dsp_r2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/yuv_mips_dsp_r2.c
+build obj/default/libwebp/yuv_neon.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/yuv_neon.c
+build obj/default/libwebp/yuv_sse2.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/yuv_sse2.c
+build obj/default/libwebp/yuv_sse41.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/dsp/yuv_sse41.c
+build obj/default/libwebp/bit_reader_utils.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/utils/bit_reader_utils.c
+build obj/default/libwebp/bit_writer_utils.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/utils/bit_writer_utils.c
+build obj/default/libwebp/color_cache_utils.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/utils/color_cache_utils.c
+build obj/default/libwebp/filters_utils.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/utils/filters_utils.c
+build obj/default/libwebp/huffman_encode_utils.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/utils/huffman_encode_utils.c
+build obj/default/libwebp/huffman_utils.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/utils/huffman_utils.c
+build obj/default/libwebp/palette.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/utils/palette.c
+build obj/default/libwebp/quant_levels_dec_utils.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/utils/quant_levels_dec_utils.c
+build obj/default/libwebp/quant_levels_utils.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/utils/quant_levels_utils.c
+build obj/default/libwebp/random_utils.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/utils/random_utils.c
+build obj/default/libwebp/rescaler_utils.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/utils/rescaler_utils.c
+build obj/default/libwebp/thread_utils.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/utils/thread_utils.c
+build obj/default/libwebp/utils.o: cc ../../../../dependencies/webmproject_libwebp_v1.4.0/src/utils/utils.c
+
+# link static lib
+build ./liblibwebp.a: ar obj/default/libwebp/alpha_dec.o obj/default/libwebp/buffer_dec.o obj/default/libwebp/frame_dec.o obj/default/libwebp/idec_dec.o obj/default/libwebp/io_dec.o obj/default/libwebp/quant_dec.o obj/default/libwebp/tree_dec.o obj/default/libwebp/vp8_dec.o obj/default/libwebp/vp8l_dec.o obj/default/libwebp/webp_dec.o obj/default/libwebp/anim_decode.o obj/default/libwebp/demux.o obj/default/libwebp/alpha_processing.o obj/default/libwebp/alpha_processing_mips_dsp_r2.o obj/default/libwebp/alpha_processing_neon.o obj/default/libwebp/alpha_processing_sse2.o obj/default/libwebp/alpha_processing_sse41.o obj/default/libwebp/cost.o obj/default/libwebp/cost_mips32.o obj/default/libwebp/cost_mips_dsp_r2.o obj/default/libwebp/cost_neon.o obj/default/libwebp/cost_sse2.o obj/default/libwebp/cpu.o obj/default/libwebp/dec.o obj/default/libwebp/dec_clip_tables.o obj/default/libwebp/dec_mips32.o obj/default/libwebp/dec_mips_dsp_r2.o obj/default/libwebp/dec_msa.o obj/default/libwebp/dec_neon.o obj/default/libwebp/dec_sse2.o obj/default/libwebp/dec_sse41.o obj/default/libwebp/enc.o obj/default/libwebp/enc_mips32.o obj/default/libwebp/enc_mips_dsp_r2.o obj/default/libwebp/enc_msa.o obj/default/libwebp/enc_neon.o obj/default/libwebp/enc_sse2.o obj/default/libwebp/enc_sse41.o obj/default/libwebp/filters.o obj/default/libwebp/filters_mips_dsp_r2.o obj/default/libwebp/filters_msa.o obj/default/libwebp/filters_neon.o obj/default/libwebp/filters_sse2.o obj/default/libwebp/lossless.o obj/default/libwebp/lossless_enc.o obj/default/libwebp/lossless_enc_mips32.o obj/default/libwebp/lossless_enc_mips_dsp_r2.o obj/default/libwebp/lossless_enc_msa.o obj/default/libwebp/lossless_enc_neon.o obj/default/libwebp/lossless_enc_sse2.o obj/default/libwebp/lossless_enc_sse41.o obj/default/libwebp/lossless_mips_dsp_r2.o obj/default/libwebp/lossless_msa.o obj/default/libwebp/lossless_neon.o obj/default/libwebp/lossless_sse2.o obj/default/libwebp/lossless_sse41.o obj/default/libwebp/rescaler.o obj/default/libwebp/rescaler_mips32.o obj/default/libwebp/rescaler_mips_dsp_r2.o obj/default/libwebp/rescaler_msa.o obj/default/libwebp/rescaler_neon.o obj/default/libwebp/rescaler_sse2.o obj/default/libwebp/ssim.o obj/default/libwebp/ssim_sse2.o obj/default/libwebp/upsampling.o obj/default/libwebp/upsampling_mips_dsp_r2.o obj/default/libwebp/upsampling_msa.o obj/default/libwebp/upsampling_neon.o obj/default/libwebp/upsampling_sse2.o obj/default/libwebp/upsampling_sse41.o obj/default/libwebp/yuv.o obj/default/libwebp/yuv_mips32.o obj/default/libwebp/yuv_mips_dsp_r2.o obj/default/libwebp/yuv_neon.o obj/default/libwebp/yuv_sse2.o obj/default/libwebp/yuv_sse41.o obj/default/libwebp/bit_reader_utils.o obj/default/libwebp/bit_writer_utils.o obj/default/libwebp/color_cache_utils.o obj/default/libwebp/filters_utils.o obj/default/libwebp/huffman_encode_utils.o obj/default/libwebp/huffman_utils.o obj/default/libwebp/palette.o obj/default/libwebp/quant_levels_dec_utils.o obj/default/libwebp/quant_levels_utils.o obj/default/libwebp/random_utils.o obj/default/libwebp/rescaler_utils.o obj/default/libwebp/thread_utils.o obj/default/libwebp/utils.o
+
+build libwebp: phony ./liblibwebp.a
