@@ -315,6 +315,7 @@ do
             links({ 'GLESv3', 'EGL', 'log', 'android' })
             files({
                 'platform/android/rive_native_android.cpp',
+                'src/threaded_scene_binding_android.cpp',
             })
         end
 
