@@ -135,7 +135,7 @@ end
 
 makecommand = makecommand .. ' FLAGS="' .. minify_flags .. '"'
 
-if os.host() == 'macosx' and _OPTIONS['os'] ~= 'android' then
+if os.host() == 'macosx' and not _OPTIONS['for_android'] then
     if _OPTIONS['os'] == 'ios' and _OPTIONS['variant'] == 'system' then
         makecommand = makecommand .. ' rive_pls_ios_metallib'
     elseif _OPTIONS['os'] == 'ios' and _OPTIONS['variant'] == 'emulator' then
