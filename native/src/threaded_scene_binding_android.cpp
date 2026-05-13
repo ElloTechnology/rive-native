@@ -25,6 +25,10 @@
 #define PROBE_LOGI(...) __android_log_print(ANDROID_LOG_INFO, PROBE_TAG, __VA_ARGS__)
 #define PROBE_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, PROBE_TAG, __VA_ARGS__)
 
+#define BG_TAG "RiveBgBinding"
+#define BG_LOGI(...) __android_log_print(ANDROID_LOG_INFO, BG_TAG, __VA_ARGS__)
+#define BG_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, BG_TAG, __VA_ARGS__)
+
 // Implemented in rive_native_android.cpp.
 extern "C" {
 EGLDisplay riveAndroidGetMainEGLDisplay();
@@ -76,24 +80,51 @@ public:
         // It drives AndroidRenderTexture::beginFrame/endFrame which writes
         // into the GL texture backed by the supplied ANativeWindow. Flutter
         // reads the latest via TextureLayer — no pixel copy needed.
+        //
+        // Fatal-error contract: `clear` and `flush` return false on any
+        // EGL/GL failure (including EGL_CONTEXT_LOST, which the underlying
+        // EGL_ERR_CHECK in rive_native_android.cpp consumes before the
+        // return value reaches us). On any false return the callback marks
+        // a binding-level fatal flag, stops drawing, and no-ops on
+        // subsequent frames until Dart calls riveThreadedDestroy. The
+        // application-side observer (riveThreadedHasFatalError + a
+        // poll site in CharacterRig._onBackgroundFrame, COR-3538 Phase 6)
+        // tears down the bg controller and falls back to the synchronous
+        // path on next session.
         auto* renderTexturePtr = renderTexture;
         float dpr = devicePixelRatio;
+        std::atomic<bool>* fatalFlag = &binding->m_fatalError;
+        std::atomic<bool>* pausedFlag = &binding->m_paused;
 
         binding->m_scene = std::make_unique<rive::ThreadedScene>(
             std::move(artboard),
             std::move(stateMachine),
             config,
-            [renderTexturePtr, abWidth, abHeight, dpr](
+            [renderTexturePtr, abWidth, abHeight, dpr, fatalFlag, pausedFlag](
                 rive::ArtboardInstance* ab,
                 int w,
                 int h) -> rive::rcp<rive::RenderImage> {
+                if (fatalFlag->load(std::memory_order_acquire))
+                {
+                    return nullptr;
+                }
+                if (pausedFlag->load(std::memory_order_acquire))
+                {
+                    return nullptr;
+                }
                 if (!clear(renderTexturePtr, true, 0x00000000))
                 {
+                    BG_LOGE("clear() returned false; marking fatal "
+                            "(likely EGL/GL failure, possibly "
+                            "EGL_CONTEXT_LOST — see RiveNative logcat)");
+                    fatalFlag->store(true, std::memory_order_release);
                     return nullptr;
                 }
                 auto* riveRenderer = makeRenderer(renderTexturePtr);
                 if (!riveRenderer)
                 {
+                    BG_LOGE("makeRenderer() returned null; marking fatal");
+                    fatalFlag->store(true, std::memory_order_release);
                     return nullptr;
                 }
                 riveRenderer->save();
@@ -102,7 +133,13 @@ public:
                     static_cast<float>(h) / abHeight * dpr));
                 ab->draw(riveRenderer);
                 riveRenderer->restore();
-                flush(renderTexturePtr, dpr);
+                if (!flush(renderTexturePtr, dpr))
+                {
+                    BG_LOGE("flush() returned false; marking fatal "
+                            "(likely EGL/GL failure, possibly "
+                            "EGL_CONTEXT_LOST — see RiveNative logcat)");
+                    fatalFlag->store(true, std::memory_order_release);
+                }
                 return nullptr; // GPU path — texture IS the output
             },
             std::move(viewModelInstance));
@@ -120,12 +157,28 @@ public:
 
     rive::ThreadedScene* scene() { return m_scene.get(); }
 
+    bool hasFatalError() const
+    {
+        return m_fatalError.load(std::memory_order_acquire);
+    }
+
+    void setPaused(bool paused)
+    {
+        m_paused.store(paused, std::memory_order_release);
+    }
+    bool isPaused() const
+    {
+        return m_paused.load(std::memory_order_acquire);
+    }
+
 private:
     ThreadedSceneBinding() = default;
 
     AndroidRenderTexture* m_renderTexture = nullptr;
     std::unique_ptr<rive::ThreadedScene> m_scene;
     float m_devicePixelRatio = 1.0f;
+    std::atomic<bool> m_fatalError{false};
+    std::atomic<bool> m_paused{false};
 };
 
 } // namespace rive_flutter
@@ -407,6 +460,18 @@ EXPORT bool riveThreadedIsRunning(void* bindingPtr)
 {
     auto* binding = static_cast<ThreadedSceneBinding*>(bindingPtr);
     return binding && binding->scene() && binding->scene()->isRunning();
+}
+
+// Returns true if the bg worker hit a fatal native error (EGL/GL failure,
+// surfaced as a `false` return from clear/makeRenderer/flush). Dart-side
+// polls this each frame (COR-3538 Phase 6 wiring) and tears down the bg
+// controller on detect, falling back to the synchronous path on the next
+// session. The flag is one-way — once set, the binding stops drawing and
+// the next riveThreadedDestroy clears the underlying ThreadedScene.
+EXPORT bool riveThreadedHasFatalError(void* bindingPtr)
+{
+    auto* binding = static_cast<ThreadedSceneBinding*>(bindingPtr);
+    return binding && binding->hasFatalError();
 }
 
 // Shared-context probe: verifies eglCreateContext(share_context=main) lets
