@@ -1028,3 +1028,5 @@
 100	1292	1778701790849287816	obj/default/rive_native/rive_native_android.o	c0d97e8e011a7743
 101	1363	1778701790849828859	obj/default/rive_native/threaded_scene_binding_android.o	9deba2b6843f9788
 1363	25763	1778701792112180824	librive_native.so	a790120417713c30
+25	1242	1778702037309699733	obj/default/rive_native/threaded_scene_binding_android.o	9deba2b6843f9788
+1243	25783	1778702038527592809	librive_native.so	a790120417713c30

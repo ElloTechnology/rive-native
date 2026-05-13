@@ -244,9 +244,30 @@ EXPORT void riveThreadedDestroy(void* bindingPtr)
 EXPORT void riveThreadedPostTime(void* bindingPtr, float dt)
 {
     auto* binding = static_cast<ThreadedSceneBinding*>(bindingPtr);
-    if (binding && binding->scene())
+    if (binding && binding->scene() && !binding->isPaused() &&
+        !binding->hasFatalError())
     {
         binding->scene()->postElapsedTime(dt);
+    }
+}
+
+// Pause / resume the bg worker. While paused, both `riveThreadedPostTime`
+// no-ops AND the render callback no-ops — so the state machine stops
+// advancing AND the worker stops drawing. The ThreadedScene's bg thread
+// continues spinning on its condition variable; we don't tear down the
+// thread, so resume is cheap (no re-init of artboard / SM / EGL).
+//
+// Wire from Dart's `WidgetsBindingObserver.didChangeAppLifecycleState`:
+//   AppLifecycleState.paused / inactive / hidden  → setPaused(true)
+//   AppLifecycleState.resumed                     → setPaused(false)
+//
+// Idempotent; safe to call from any thread.
+EXPORT void riveThreadedSetPaused(void* bindingPtr, bool paused)
+{
+    auto* binding = static_cast<ThreadedSceneBinding*>(bindingPtr);
+    if (binding)
+    {
+        binding->setPaused(paused);
     }
 }
 
