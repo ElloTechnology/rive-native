@@ -1032,3 +1032,6 @@
 1238	28085	1778702126504280391	librive_native.so	b81c72ed609af950
 30	1263	1778703455735497297	obj/default/rive_native/threaded_scene_binding_android.o	cd63d50295cb6eee
 1264	28507	1778703456968993950	librive_native.so	b81c72ed609af950
+46	973	1778704835880969566	obj/default/rive_native/rive_native_android.o	ca0625977bc90ecf
+47	1038	1778704835881375443	obj/default/rive_native/threaded_scene_binding_android.o	cd63d50295cb6eee
+1038	26255	1778704836872302796	librive_native.so	b81c72ed609af950
