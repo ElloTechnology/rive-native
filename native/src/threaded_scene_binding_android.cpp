@@ -1,32 +1,6 @@
-/*
- * ThreadedScene binding for Flutter — Android GLES.
- *
- * COR-3538 Phase 2 spike. Models on threaded_scene_binding.mm (orphaned at
- * ElloTechnology/rive-native@ello, 378c75b652) but renders through Android's
- * RenderContextGLImpl + RenderTargetGL via the AndroidRenderTexture wrapper
- * already exported by native/platform/android/rive_native_android.cpp.
- *
- * Spike scope only — see specs/2026-05-11-COR-3538-revive-background-rive/
- * spike-results.md for the questions this binding is meant to answer:
- *
- *   1. Can a worker thread drive AndroidRenderTexture's clear/flush/makeRenderer
- *      while the main thread does *no* GL? (Flutter composites the produced
- *      texture via TextureLayer; the main thread never touches GL state for
- *      Rive content directly.)
- *   2. Does a shared EGL context (eglCreateContext with main thread's m_context
- *      as share_context) survive Android lifecycle events (sleep/wake/rotation)?
- *   3. Does Impeller GL state get corrupted by the worker thread's GL usage?
- *
- * Out of spike scope (Phase 3 productionization):
- *   - Error recovery on EGL context loss (EGL_CONTEXT_LOST handling)
- *   - Lifecycle hardening (sleep/wake/rotation/app-background)
- *   - Impeller-safe GL state save/restore around the worker's flush
- *   - Worker-thread EGL config negotiation (currently piggy-backs on main)
- *
- * All advance+draw work happens on a background C++ thread inside
- * ThreadedScene. The Flutter UI thread only composites the cached GPU
- * texture via Flutter's external-texture TextureLayer.
- */
+// ThreadedScene binding for Android GLES — COR-3538 Phase 2 spike.
+// Android counterpart of threaded_scene_binding.mm; renders through
+// AndroidRenderTexture (rive_native_android.cpp).
 
 #include "rive_native/external.hpp"
 #include "rive/threaded_scene.hpp"
@@ -51,15 +25,13 @@
 #define PROBE_LOGI(...) __android_log_print(ANDROID_LOG_INFO, PROBE_TAG, __VA_ARGS__)
 #define PROBE_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, PROBE_TAG, __VA_ARGS__)
 
-// Accessors implemented in rive_native_android.cpp.
+// Implemented in rive_native_android.cpp.
 extern "C" {
 EGLDisplay riveAndroidGetMainEGLDisplay();
 EGLContext riveAndroidGetMainEGLContext();
 EGLConfig riveAndroidGetMainEGLConfig();
 }
 
-// Forward declarations from rive_native_android.cpp (same translation unit
-// linkage on Android — the GL renderer wrapper is defined there).
 class AndroidRenderTexture;
 EXPORT bool clear(AndroidRenderTexture* renderTexture,
                   bool clear,
@@ -70,41 +42,6 @@ EXPORT rive::Renderer* makeRenderer(AndroidRenderTexture* renderTexture);
 namespace rive_flutter
 {
 
-/// Wraps a ThreadedScene wired to an AndroidRenderTexture for GLES rendering.
-/// The background thread calls clear/draw/flush on the AndroidRenderTexture
-/// via the RenderCallback, producing frames into an offscreen texture that
-/// Flutter composites via TextureLayer.
-///
-/// THREADING NOTE (spike question 1):
-/// AndroidRenderTexture in rive_native_android.cpp serializes its public
-/// methods with a flutterMutex. The render callback inside ThreadedScene
-/// runs on the bg thread, so calls from this binding only contend with any
-/// other UI-thread caller of clear/flush/makeRenderer. In the bg-mode
-/// configuration, the UI thread should not be calling these symbols for the
-/// same renderTexture instance — that contract is the spike validation.
-///
-/// THREADING NOTE (spike question 2):
-/// EGLThreadState (the GL context holder in rive_native_android.cpp) is a
-/// thread-local singleton constructed on first call to riveFactory() or
-/// AndroidRenderTexture::beginFrame(). When the bg thread first invokes
-/// `clear` via the render callback, it will construct its OWN EGLThreadState
-/// (because thread_local storage is per-thread). That means the bg thread
-/// gets a fresh EGL display + context, NOT sharing resources with the UI
-/// thread's context. Resources (textures, programs) created on the bg
-/// thread are NOT visible to the UI thread's GL context.
-///
-/// For the spike to actually produce a composited texture, one of two
-/// changes is needed (TODO before first device run):
-///   (a) Add `share_context` to the bg thread's eglCreateContext call so
-///       the bg context shares resources with the UI thread's context. The
-///       UI thread context must be accessible — likely requires an FFI
-///       accessor on EGLThreadState or a way to look up the main thread's
-///       EGLContext at bg-thread initialization time.
-///   (b) Switch to producing an AHardwareBuffer / EGLImage on the bg thread
-///       and importing it into Flutter's compositor on the UI thread. More
-///       work, but isolates the contexts cleanly.
-///
-/// Easier path for the spike is (a). Hardening lives in Phase 3.
 class ThreadedSceneBinding
 {
 public:
@@ -472,34 +409,10 @@ EXPORT bool riveThreadedIsRunning(void* bindingPtr)
     return binding && binding->scene() && binding->scene()->isRunning();
 }
 
-// =============================================================================
-// COR-3538 Phase 2 spike — shared-context probe.
-//
-// Answers the question: can a worker thread own an EGL context that shares
-// resources with the main thread's context on this device?
-//
-// Synchronous self-contained probe:
-//   1. Read the main thread's EGLDisplay, EGLContext, EGLConfig (must be
-//      initialized — typically Rive has rendered at least one frame).
-//   2. Create a new EGLContext with share_context = main_context.
-//   3. Create a 1x1 PBuffer surface.
-//   4. Spawn a worker thread, make the new (worker) context current there.
-//   5. Worker creates a 4x4 GL_RGBA texture, captures its name, calls
-//      glFinish() to ensure the texture is fully committed, then releases
-//      the context.
-//   6. Probe thread re-acquires the worker context (or makes main current),
-//      calls glIsTexture(textureName). If true, GL resources are shared —
-//      this is the empirical evidence we want.
-//   7. Tears down: destroy surface, destroy worker context. Texture is
-//      destroyed implicitly when its owning context is destroyed.
-//   8. Returns a result code (0 = success, negative = failed at step N).
-//      All steps log to logcat under tag "CorRive3538Probe" so you can
-//      reconstruct the run with `adb logcat -s CorRive3538Probe`.
-//
-// Spike-only. Do not ship. Caller (Dart) should run this once at boot on
-// the spike branch and log the return code + grep logcat for CorRive3538Probe.
-// =============================================================================
-
+// Shared-context probe: verifies eglCreateContext(share_context=main) lets
+// a worker thread see GL resources created by the main thread (and vice
+// versa). Returns 0 on success, negative on the step that failed; native
+// logs go to tag CorRive3538Probe. Spike-only.
 EXPORT int riveSpikeProbeSharedContext()
 {
     PROBE_LOGI("--- begin ---");
