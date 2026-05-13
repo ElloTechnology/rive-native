@@ -302,13 +302,6 @@ public:
         return m_renderContext.get();
     }
 
-    // Accessors added for COR-3538 Phase 2 spike — let the ThreadedScene
-    // binding read main thread's EGL handles so it can construct a worker
-    // context with share_context = main.
-    EGLDisplay display() const { return m_display; }
-    EGLContext context() const { return m_context; }
-    EGLConfig config() const { return m_config; }
-
 protected:
     EGLSurface m_currentSurface = EGL_NO_SURFACE;
     EGLDisplay m_display = EGL_NO_DISPLAY;
@@ -568,51 +561,3 @@ EXPORT rive::Renderer* makeRenderer(AndroidRenderTexture* renderTexture)
     return renderTexture->renderer();
 }
 
-// =============================================================================
-// COR-3538 Phase 2 spike — accessors for main thread's EGL state.
-//
-// The ThreadedScene binding lives in a separate translation unit
-// (threaded_scene_binding_android.cpp) and needs to read the singleton
-// AndroidRenderTexture::threadState's EGL display/context/config so it can
-// construct a worker-thread-owned context with share_context = main_context.
-//
-// These functions return EGL_NO_DISPLAY / EGL_NO_CONTEXT / nullptr when the
-// main EGLThreadState has not been initialized yet. Callers must ensure main
-// has initialized first (typically by Rive having rendered at least one
-// frame on the main thread).
-// =============================================================================
-
-extern "C"
-{
-
-EXPORT EGLDisplay riveAndroidGetMainEGLDisplay()
-{
-    std::unique_lock<std::mutex> lock(flutterMutex);
-    if (!AndroidRenderTexture::threadState)
-    {
-        return EGL_NO_DISPLAY;
-    }
-    return AndroidRenderTexture::threadState->display();
-}
-
-EXPORT EGLContext riveAndroidGetMainEGLContext()
-{
-    std::unique_lock<std::mutex> lock(flutterMutex);
-    if (!AndroidRenderTexture::threadState)
-    {
-        return EGL_NO_CONTEXT;
-    }
-    return AndroidRenderTexture::threadState->context();
-}
-
-EXPORT EGLConfig riveAndroidGetMainEGLConfig()
-{
-    std::unique_lock<std::mutex> lock(flutterMutex);
-    if (!AndroidRenderTexture::threadState)
-    {
-        return static_cast<EGLConfig>(0);
-    }
-    return AndroidRenderTexture::threadState->config();
-}
-
-} // extern "C"
