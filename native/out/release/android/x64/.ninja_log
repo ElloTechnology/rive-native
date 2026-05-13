@@ -1025,3 +1025,6 @@
 48264	49466	1778614183372362744	obj/default/rive_native/threaded_scene_binding_android.o	cd63d50295cb6eee
 48244	49917	1778614183352946492	obj/default/rive_native/rive_binding.o	a0d57b3b31b8a051
 49917	77027	1778614185026069691	librive_native.so	b81c72ed609af950
+49	1024	1778701873302826509	obj/default/rive_native/rive_native_android.o	ca0625977bc90ecf
+50	1114	1778701873303151135	obj/default/rive_native/threaded_scene_binding_android.o	cd63d50295cb6eee
+1114	25815	1778701874367520978	librive_native.so	b81c72ed609af950
