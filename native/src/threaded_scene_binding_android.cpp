@@ -120,6 +120,38 @@ public:
                     fatalFlag->store(true, std::memory_order_release);
                     return nullptr;
                 }
+
+                // Impeller-safe state save. The bg worker shares the
+                // singleton EGL context with Flutter's render thread (which
+                // hosts Impeller's GL backend); whatever GL state we leave
+                // here becomes Impeller's starting state on its next
+                // eglMakeCurrent. AndroidRenderTexture::endFrame already
+                // calls plsGL->unbindGLInternalResources() but only resets
+                // Rive's own bindings — viewport, scissor, program, etc.
+                // are still whatever Rive's draws left. Snapshot here
+                // (after beginFrame has put the context current and Rive
+                // has set up its render target) and restore after flush so
+                // each bg cycle is state-neutral from Impeller's view.
+                GLint savedViewport[4] = {0, 0, 0, 0};
+                GLint savedScissor[4] = {0, 0, 0, 0};
+                GLint savedActiveTexture = GL_TEXTURE0;
+                GLint savedProgram = 0;
+                GLint savedFramebuffer = 0;
+                GLint savedTextureBinding2D = 0;
+                GLboolean savedScissorEnabled = GL_FALSE;
+                GLboolean savedBlendEnabled = GL_FALSE;
+                GLboolean savedDepthTestEnabled = GL_FALSE;
+                glGetIntegerv(GL_VIEWPORT, savedViewport);
+                glGetIntegerv(GL_SCISSOR_BOX, savedScissor);
+                glGetIntegerv(GL_ACTIVE_TEXTURE, &savedActiveTexture);
+                glGetIntegerv(GL_CURRENT_PROGRAM, &savedProgram);
+                glGetIntegerv(GL_FRAMEBUFFER_BINDING, &savedFramebuffer);
+                glGetIntegerv(GL_TEXTURE_BINDING_2D,
+                              &savedTextureBinding2D);
+                savedScissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
+                savedBlendEnabled = glIsEnabled(GL_BLEND);
+                savedDepthTestEnabled = glIsEnabled(GL_DEPTH_TEST);
+
                 auto* riveRenderer = makeRenderer(renderTexturePtr);
                 if (!riveRenderer)
                 {
@@ -133,7 +165,39 @@ public:
                     static_cast<float>(h) / abHeight * dpr));
                 ab->draw(riveRenderer);
                 riveRenderer->restore();
-                if (!flush(renderTexturePtr, dpr))
+                bool flushOk = flush(renderTexturePtr, dpr);
+
+                // Restore Impeller-relevant state (unconditional — even if
+                // flush failed, we want to leave a known state for any
+                // future consumer of the context).
+                glViewport(savedViewport[0],
+                           savedViewport[1],
+                           savedViewport[2],
+                           savedViewport[3]);
+                glScissor(savedScissor[0],
+                          savedScissor[1],
+                          savedScissor[2],
+                          savedScissor[3]);
+                glActiveTexture(static_cast<GLenum>(savedActiveTexture));
+                glUseProgram(static_cast<GLuint>(savedProgram));
+                glBindFramebuffer(GL_FRAMEBUFFER,
+                                  static_cast<GLuint>(savedFramebuffer));
+                glBindTexture(GL_TEXTURE_2D,
+                              static_cast<GLuint>(savedTextureBinding2D));
+                if (savedScissorEnabled)
+                    glEnable(GL_SCISSOR_TEST);
+                else
+                    glDisable(GL_SCISSOR_TEST);
+                if (savedBlendEnabled)
+                    glEnable(GL_BLEND);
+                else
+                    glDisable(GL_BLEND);
+                if (savedDepthTestEnabled)
+                    glEnable(GL_DEPTH_TEST);
+                else
+                    glDisable(GL_DEPTH_TEST);
+
+                if (!flushOk)
                 {
                     BG_LOGE("flush() returned false; marking fatal "
                             "(likely EGL/GL failure, possibly "
