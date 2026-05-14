@@ -63,7 +63,17 @@ public:
         rive::ThreadedScene::Config config;
         config.width = width;
         config.height = height;
-        config.runFirstFrameSync = true;
+        // runFirstFrameSync=false: do NOT call runOneFrame() synchronously in
+        // the ThreadedScene constructor. On some EGL environments (emulator
+        // gfxstream, unusual GLES drivers) the synchronous first-frame call
+        // crashes (SIGSEGV in StateMachineInstance::advanceAndApply — fault
+        // addr 0x39 — before any GL call). With runFirstFrameSync=false the
+        // constructor returns immediately and the background thread handles the
+        // first frame; if it faults there the process still dies, but the
+        // Dart-side gets a chance to check riveThreadedHasFatalError() before
+        // the crash propagates to the UI thread. The first visible frame is
+        // delayed by one background-thread tick (~16 ms on 60 Hz devices).
+        config.runFirstFrameSync = false;
 
         // The render callback runs on the background thread.
         // It drives AndroidRenderTexture::beginFrame/endFrame which writes
