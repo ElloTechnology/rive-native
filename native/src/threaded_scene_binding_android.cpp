@@ -220,9 +220,18 @@ public:
 
     rive::ThreadedScene* scene() { return m_scene.get(); }
 
+    // True if EITHER the Android binding marked a fatal EGL/GL failure (via
+    // a false return from clear/makeRenderer/flush) OR the underlying
+    // ThreadedScene caught an exception thrown out of the render callback.
+    // Both indicate the bg worker is permanently stopped; either should
+    // trip the Dart-side sync remount.
     bool hasFatalError() const
     {
-        return m_fatalError.load(std::memory_order_acquire);
+        if (m_fatalError.load(std::memory_order_acquire))
+            return true;
+        if (m_scene && m_scene->hasFatalError())
+            return true;
+        return false;
     }
 
     void setPaused(bool paused)
@@ -494,6 +503,85 @@ EXPORT int riveThreadedAcquireSnapshot(
         count++;
     }
     return count;
+}
+
+/// Combined snapshot + event drain in a single call. The native side acquires
+/// the cached-image mutex once and reads both, so the returned snapshot/events
+/// pair always corresponds to the same bg cycle.
+///
+/// Returns the snapshot property count; the event count is written through
+/// outEventCount. Snapshot and event arrays follow the same encoding as
+/// riveThreadedAcquireSnapshot and riveThreadedPollEvents respectively.
+EXPORT int riveThreadedAcquireFrame(
+    void* bindingPtr,
+    const char** outPropNames,
+    const char** outPropValues,
+    int* outPropTypes,
+    int maxProperties,
+    const char** outEventNames,
+    float* outEventDelays,
+    int maxEvents,
+    int* outEventCount)
+{
+    auto* binding = static_cast<ThreadedSceneBinding*>(bindingPtr);
+    if (!binding || !binding->scene())
+    {
+        if (outEventCount)
+            *outEventCount = 0;
+        return 0;
+    }
+
+    thread_local rive::ViewModelSnapshot snapshot;
+    thread_local std::vector<rive::ThreadedOutputEvent> events;
+    thread_local std::vector<std::string> propValues;
+    snapshot.clear();
+    events.clear();
+    propValues.clear();
+    binding->scene()->acquireFrame(snapshot, events);
+
+    int propCount = 0;
+    for (const auto& [name, value] : snapshot)
+    {
+        if (propCount >= maxProperties)
+            break;
+
+        outPropNames[propCount] = name.c_str();
+
+        if (std::holds_alternative<std::monostate>(value))
+        {
+            outPropTypes[propCount] = 0;
+            propValues.emplace_back("");
+        }
+        else if (std::holds_alternative<bool>(value))
+        {
+            outPropTypes[propCount] = 1;
+            propValues.emplace_back(std::get<bool>(value) ? "true" : "false");
+        }
+        else if (std::holds_alternative<float>(value))
+        {
+            outPropTypes[propCount] = 2;
+            propValues.emplace_back(std::to_string(std::get<float>(value)));
+        }
+        else if (std::holds_alternative<std::string>(value))
+        {
+            outPropTypes[propCount] = 3;
+            propValues.emplace_back(std::get<std::string>(value));
+        }
+
+        outPropValues[propCount] = propValues.back().c_str();
+        propCount++;
+    }
+
+    int eventCount = static_cast<int>(
+        std::min(events.size(), static_cast<size_t>(maxEvents)));
+    for (int i = 0; i < eventCount; i++)
+    {
+        outEventNames[i] = events[i].eventName.c_str();
+        outEventDelays[i] = events[i].secondsDelay;
+    }
+    if (outEventCount)
+        *outEventCount = eventCount;
+    return propCount;
 }
 
 // --- Pointer events ---

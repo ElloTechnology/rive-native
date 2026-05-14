@@ -126,6 +126,33 @@ typedef _PointerEventDart = void Function(
 typedef _IsRunningNative = Bool Function(Pointer<Void> binding);
 typedef _IsRunningDart = bool Function(Pointer<Void> binding);
 
+typedef _HasFatalErrorNative = Bool Function(Pointer<Void> binding);
+typedef _HasFatalErrorDart = bool Function(Pointer<Void> binding);
+
+// Combined snapshot + events (single mutex acquisition)
+typedef _AcquireFrameNative = Int32 Function(
+  Pointer<Void> binding,
+  Pointer<Pointer<Utf8>> outPropNames,
+  Pointer<Pointer<Utf8>> outPropValues,
+  Pointer<Int32> outPropTypes,
+  Int32 maxProperties,
+  Pointer<Pointer<Utf8>> outEventNames,
+  Pointer<Float> outEventDelays,
+  Int32 maxEvents,
+  Pointer<Int32> outEventCount,
+);
+typedef _AcquireFrameDart = int Function(
+  Pointer<Void> binding,
+  Pointer<Pointer<Utf8>> outPropNames,
+  Pointer<Pointer<Utf8>> outPropValues,
+  Pointer<Int32> outPropTypes,
+  int maxProperties,
+  Pointer<Pointer<Utf8>> outEventNames,
+  Pointer<Float> outEventDelays,
+  int maxEvents,
+  Pointer<Int32> outEventCount,
+);
+
 // ---------------------------------------------------------------------------
 // Resolved function pointers
 // ---------------------------------------------------------------------------
@@ -195,6 +222,14 @@ final _IsRunningDart _isRunning =
     _lib.lookupFunction<_IsRunningNative, _IsRunningDart>(
         'riveThreadedIsRunning');
 
+final _HasFatalErrorDart _hasFatalError =
+    _lib.lookupFunction<_HasFatalErrorNative, _HasFatalErrorDart>(
+        'riveThreadedHasFatalError');
+
+final _AcquireFrameDart _acquireFrame =
+    _lib.lookupFunction<_AcquireFrameNative, _AcquireFrameDart>(
+        'riveThreadedAcquireFrame');
+
 // ---------------------------------------------------------------------------
 // Reported event from the state machine
 // ---------------------------------------------------------------------------
@@ -203,6 +238,13 @@ class RiveThreadedEvent {
   final String name;
   final double secondsDelay;
   const RiveThreadedEvent(this.name, this.secondsDelay);
+}
+
+/// Combined result of a single [RiveThreadedBindings.acquireFrame] call.
+class ThreadedFrame {
+  final List<SnapshotEntry> properties;
+  final List<RiveThreadedEvent> events;
+  const ThreadedFrame({required this.properties, required this.events});
 }
 
 // ---------------------------------------------------------------------------
@@ -267,6 +309,12 @@ class RiveThreadedBindings {
 
   bool get isDisposed => _ptr == null;
   bool get isRunning => _ptr != null && _isRunning(_ptr!);
+
+  /// True after the native render callback marked a fatal EGL/GL error (e.g.
+  /// EGL_CONTEXT_LOST, clear/makeRenderer/flush returning false). One-way flag;
+  /// once set, the bg worker is permanently halted and a sync remount is the
+  /// only recovery.
+  bool get hasFatalError => _ptr != null && _hasFatalError(_ptr!);
 
   void dispose() {
     if (_ptr != null) {
@@ -382,6 +430,68 @@ class RiveThreadedBindings {
     calloc.free(valuesPtr);
     calloc.free(typesPtr);
     return entries;
+  }
+
+  /// Acquires the latest snapshot AND drains queued output events in a single
+  /// FFI round-trip. The native side holds the cached-image mutex once for the
+  /// snapshot copy and the output queue mutex once for the event drain, so the
+  /// caller sees a snapshot and event batch produced by overlapping bg cycles
+  /// rather than two bg cycles apart.
+  ///
+  /// Returns at most [maxProperties] snapshot entries (truncated; current
+  /// rig usage caps at 64) and at most [maxEvents] events per call (drain in
+  /// a loop if more may be queued — see kDefaultPollCap consumer).
+  ThreadedFrame acquireFrame({
+    int maxProperties = 64,
+    int maxEvents = 128,
+  }) {
+    if (_ptr == null) return const ThreadedFrame(properties: [], events: []);
+
+    final propNamesPtr = calloc<Pointer<Utf8>>(maxProperties);
+    final propValuesPtr = calloc<Pointer<Utf8>>(maxProperties);
+    final propTypesPtr = calloc<Int32>(maxProperties);
+    final eventNamesPtr = calloc<Pointer<Utf8>>(maxEvents);
+    final eventDelaysPtr = calloc<Float>(maxEvents);
+    final eventCountPtr = calloc<Int32>(1);
+
+    final propCount = _acquireFrame(
+      _ptr!,
+      propNamesPtr,
+      propValuesPtr,
+      propTypesPtr,
+      maxProperties,
+      eventNamesPtr,
+      eventDelaysPtr,
+      maxEvents,
+      eventCountPtr,
+    );
+    final eventCount = eventCountPtr[0];
+
+    final properties = <SnapshotEntry>[];
+    for (var i = 0; i < propCount; i++) {
+      final typeInt = propTypesPtr[i];
+      properties.add(SnapshotEntry(
+        name: propNamesPtr[i].toDartString(),
+        type: SnapshotValueType.values[typeInt.clamp(0, 3)],
+        rawValue: propValuesPtr[i].toDartString(),
+      ));
+    }
+    final events = <RiveThreadedEvent>[];
+    for (var i = 0; i < eventCount; i++) {
+      events.add(RiveThreadedEvent(
+        eventNamesPtr[i].toDartString(),
+        eventDelaysPtr[i],
+      ));
+    }
+
+    calloc.free(propNamesPtr);
+    calloc.free(propValuesPtr);
+    calloc.free(propTypesPtr);
+    calloc.free(eventNamesPtr);
+    calloc.free(eventDelaysPtr);
+    calloc.free(eventCountPtr);
+
+    return ThreadedFrame(properties: properties, events: events);
   }
 
   // --- Pointer events ---

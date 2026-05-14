@@ -206,6 +206,14 @@ public:
     // background thread).
     void pollReportedEvents(std::vector<ThreadedOutputEvent>& out);
 
+    // Atomically acquire the latest snapshot AND drain queued output events
+    // under the same cached-image mutex acquisition. Eliminates the temporal
+    // gap where separate acquireViewModelSnapshot() and pollReportedEvents()
+    // calls can straddle a bg cycle (events from cycle N visible alongside
+    // snapshot from cycle N-1).
+    void acquireFrame(ViewModelSnapshot& outSnapshot,
+                      std::vector<ThreadedOutputEvent>& outEvents);
+
     // Current dimensions.
     int width() const { return m_width.load(std::memory_order_relaxed); }
     int height() const { return m_height.load(std::memory_order_relaxed); }
@@ -216,7 +224,15 @@ public:
 
     bool isRunning() const
     {
-        return m_running.load(std::memory_order_relaxed);
+        return m_running.load(std::memory_order_acquire);
+    }
+
+    // Returns true if the background thread terminated because the render
+    // callback threw an uncaught exception. The scene is no longer producing
+    // frames; callers can fall back to a synchronous path.
+    bool hasFatalError() const
+    {
+        return m_fatalError.load(std::memory_order_acquire);
     }
 
 private:
@@ -231,32 +247,39 @@ private:
     std::unique_ptr<StateMachineInstance> m_stateMachine;
     RenderCallback m_renderCallback;
 
-    // Cached image + ViewModel snapshot: written by background thread,
-    // read by render thread. Both protected by the same mutex.
+    // Cached image, ViewModel snapshot, and ready-event buffer: written by
+    // background thread, read by render thread. All three swap under the same
+    // mutex at end of runOneFrame so a single acquireFrame() observes a
+    // coherent snapshot/event pair from the same bg cycle.
     std::mutex m_cachedImageMutex;
     rcp<RenderImage> m_cachedImage;
     ViewModelSnapshot m_viewModelSnapshot;
+    std::vector<ThreadedOutputEvent> m_readyEvents;
 
     // Watch list: written by render thread, read by background thread.
     std::mutex m_watchListMutex;
     std::vector<std::string> m_watchedProperties;
 
-    // Staging area for snapshot (background thread only, no lock needed).
+    // Staging areas (background thread only, no lock needed). Moved into the
+    // ready slots under m_cachedImageMutex at end of cycle.
     ViewModelSnapshot m_pendingSnapshot;
+    std::vector<ThreadedOutputEvent> m_pendingEvents;
 
     // Accumulated elapsed time.
     std::atomic<float> m_accumulatedTime{0.0f};
 
-    // Event queues.
+    // Input event queue (UI thread → bg thread). Output events are staged
+    // and swapped together with the snapshot for coherent acquireFrame reads.
     ThreadedEventQueue<ThreadedInputEvent> m_inputQueue;
-    ThreadedEventQueue<ThreadedOutputEvent> m_outputQueue;
     std::vector<ThreadedInputEvent> m_drainBuffer; // reused each cycle
 
     // Thread lifecycle.
     std::thread m_thread;
     std::atomic<bool> m_running{false};
+    std::atomic<bool> m_fatalError{false};
     std::mutex m_wakeMutex;
     std::condition_variable m_wakeCV;
+    bool m_wakeFlag = false; // protected by m_wakeMutex
 
     // ViewModel instance for property lookups (accessed only on bg thread).
     rcp<ViewModelInstanceRuntime> m_viewModelInstance;
