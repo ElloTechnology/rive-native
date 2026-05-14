@@ -2711,6 +2711,7 @@ class FFIStateMachine extends StateMachine
 
   @override
   bool advanceAndApply(double elapsedSeconds) {
+    if (pointer == nullptr) return false; // released via claimNativeOwnership
     _handleEvents();
     final result =
         _stateMachineInstanceAdvanceAndApply(pointer, elapsedSeconds);
@@ -3243,12 +3244,14 @@ class FFIRiveArtboard extends Artboard
 
   @override
   void draw(Renderer renderer) {
+    if (pointer == nullptr) return; // released via claimNativeOwnership
     assert(riveFactory.isValidRenderer(renderer));
     _artboardDraw(pointer, (renderer as RiveFFIReference).pointer);
   }
 
   @override
   void drawInternal(Renderer renderer) {
+    if (pointer == nullptr) return;
     assert(riveFactory.isValidRenderer(renderer));
     _artboardDrawInternal(pointer, (renderer as RiveFFIReference).pointer);
   }
