@@ -26,6 +26,7 @@
 #define BG_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, BG_TAG, __VA_ARGS__)
 
 class AndroidRenderTexture;
+extern std::recursive_mutex flutterMutex;
 EXPORT bool clear(AndroidRenderTexture* renderTexture,
                   bool clear,
                   uint32_t color);
@@ -119,6 +120,9 @@ public:
                 {
                     return nullptr;
                 }
+
+                std::unique_lock<std::recursive_mutex> renderLock(
+                    flutterMutex);
                 if (!clear(renderTexturePtr, true, 0x00000000))
                 {
                     BG_LOGE("clear() returned false; marking fatal "

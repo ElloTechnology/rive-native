@@ -22,7 +22,7 @@
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
-std::mutex flutterMutex;
+std::recursive_mutex flutterMutex;
 
 #define EGL_ERR_CHECK() _check_egl_error(__FILE__, __LINE__)
 
@@ -268,7 +268,7 @@ public:
         EGL_ERR_CHECK();
     }
 
-    void makeCurrent(EGLSurface eglSurface)
+    bool makeCurrent(EGLSurface eglSurface)
     {
         if (eglSurface == m_currentSurface)
         {
@@ -278,17 +278,18 @@ public:
         if (eglSurface == EGL_NO_SURFACE)
         {
             LOGE("Cannot make EGL_NO_SURFACE current");
-            return;
+            return false;
         }
 
         if (!eglMakeCurrent(m_display, eglSurface, eglSurface, m_context))
         {
             LOGE("eglMakeCurrent failed");
             EGL_ERR_CHECK();
-            return;
+            return false;
         }
 
         m_currentSurface = eglSurface;
+        return true;
     }
 
     void swapBuffers()
@@ -372,7 +373,10 @@ public:
                 return false;
             }
 
-            threadState->makeCurrent(m_eglSurface);
+            if (!threadState->makeCurrent(m_eglSurface))
+            {
+                return false;
+            }
             auto renderContext = threadState->renderContext();
             if (renderContext == nullptr)
             {
@@ -434,7 +438,10 @@ public:
             renderContext->static_impl_cast<rive::gpu::RenderContextGLImpl>();
         plsGL->invalidateGLState();
 
-        threadState->makeCurrent(m_eglSurface);
+        if (!threadState->makeCurrent(m_eglSurface))
+        {
+            return false;
+        }
 
         renderContext->flush({.renderTarget = m_renderTarget.get()});
         threadState->swapBuffers();
@@ -465,7 +472,7 @@ std::unique_ptr<EGLThreadState> AndroidRenderTexture::threadState;
 
 EXPORT rive::Factory* riveFactory()
 {
-    std::unique_lock<std::mutex> lock(flutterMutex);
+    std::unique_lock<std::recursive_mutex> lock(flutterMutex);
     if (!AndroidRenderTexture::threadState)
     {
         AndroidRenderTexture::threadState = std::make_unique<EGLThreadState>();
@@ -496,7 +503,7 @@ EXPORT void Java_app_rive_rive_1native_RiveNativePluginKt_destroyRiveRenderer(
     jclass clazz,
     jlong renderer)
 {
-    std::unique_lock<std::mutex> lock(flutterMutex);
+    std::unique_lock<std::recursive_mutex> lock(flutterMutex);
     if (renderer != 0)
     {
         AndroidRenderTexture* renderTexture =
@@ -515,7 +522,7 @@ Java_app_rive_rive_1native_RiveNativePluginKt_markDestroyedRiveRenderer(
     jclass clazz,
     jlong renderer)
 {
-    std::unique_lock<std::mutex> lock(flutterMutex);
+    std::unique_lock<std::recursive_mutex> lock(flutterMutex);
     if (renderer != 0)
     {
         AndroidRenderTexture* renderTexture =
@@ -536,7 +543,7 @@ EXPORT bool clear(AndroidRenderTexture* renderTexture,
     {
         return false;
     }
-    std::unique_lock<std::mutex> lock(flutterMutex);
+    std::unique_lock<std::recursive_mutex> lock(flutterMutex);
     return renderTexture->beginFrame(clear, color);
 }
 
@@ -547,7 +554,7 @@ EXPORT bool flush(AndroidRenderTexture* renderTexture, float devicePixelRatio)
         return false;
     }
 
-    std::unique_lock<std::mutex> lock(flutterMutex);
+    std::unique_lock<std::recursive_mutex> lock(flutterMutex);
     return renderTexture->endFrame(devicePixelRatio);
 }
 
@@ -557,7 +564,6 @@ EXPORT rive::Renderer* makeRenderer(AndroidRenderTexture* renderTexture)
     {
         return nullptr;
     }
-    std::unique_lock<std::mutex> lock(flutterMutex);
+    std::unique_lock<std::recursive_mutex> lock(flutterMutex);
     return renderTexture->renderer();
 }
-
