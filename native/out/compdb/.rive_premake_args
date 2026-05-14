@@ -1,1 +1,0 @@
-export-compile-commands --config=debug --out=out/compdb --with_rive_text --with_rive_layout --flutter_runtime --variant=system --for_android --arch=arm64
