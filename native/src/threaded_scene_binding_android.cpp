@@ -31,6 +31,11 @@ EXPORT bool clear(AndroidRenderTexture* renderTexture,
                   uint32_t color);
 EXPORT bool flush(AndroidRenderTexture* renderTexture, float devicePixelRatio);
 EXPORT rive::Renderer* makeRenderer(AndroidRenderTexture* renderTexture);
+EXPORT void* riveThreadedTakeArtboard(void* wrappedArtboardPtr);
+EXPORT void* riveThreadedTakeStateMachine(void* wrappedMachinePtr);
+EXPORT void* riveThreadedRefViewModelInstance(void* wrappedVMIPtr);
+EXPORT void riveThreadedReleaseArtboardWrapper(void* wrappedArtboardPtr);
+EXPORT void riveThreadedReleaseStateMachineWrapper(void* wrappedMachinePtr);
 
 namespace rive_flutter
 {
@@ -63,6 +68,9 @@ public:
         rive::ThreadedScene::Config config;
         config.width = width;
         config.height = height;
+        config.logWarning = [](const std::string& msg) {
+            BG_LOGE("%s", msg.c_str());
+        };
         // runFirstFrameSync=false: do NOT call runOneFrame() synchronously in
         // the ThreadedScene constructor. On some EGL environments (emulator
         // gfxstream, unusual GLES drivers) the synchronous first-frame call
@@ -150,6 +158,9 @@ public:
                 savedScissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
                 savedBlendEnabled = glIsEnabled(GL_BLEND);
                 savedDepthTestEnabled = glIsEnabled(GL_DEPTH_TEST);
+                // This captures the state Impeller has proven sensitive to.
+                // If corruption persists, audit blend func/equation, write
+                // masks, cull/stencil, vertex-array, and buffer bindings.
 
                 auto* riveRenderer = makeRenderer(renderTexturePtr);
                 if (!riveRenderer)
@@ -212,10 +223,8 @@ public:
 
     ~ThreadedSceneBinding()
     {
-        if (m_scene)
-        {
-            m_scene->stop();
-        }
+        m_scene = nullptr;
+        releaseTransferredWrappers();
     }
 
     rive::ThreadedScene* scene() { return m_scene.get(); }
@@ -243,11 +252,33 @@ public:
         return m_paused.load(std::memory_order_acquire);
     }
 
+    void takeTransferredWrappers(void* wrappedArtboard, void* wrappedMachine)
+    {
+        m_wrappedArtboard = wrappedArtboard;
+        m_wrappedMachine = wrappedMachine;
+    }
+
 private:
     ThreadedSceneBinding() = default;
 
+    void releaseTransferredWrappers()
+    {
+        if (m_wrappedMachine != nullptr)
+        {
+            riveThreadedReleaseStateMachineWrapper(m_wrappedMachine);
+            m_wrappedMachine = nullptr;
+        }
+        if (m_wrappedArtboard != nullptr)
+        {
+            riveThreadedReleaseArtboardWrapper(m_wrappedArtboard);
+            m_wrappedArtboard = nullptr;
+        }
+    }
+
     AndroidRenderTexture* m_renderTexture = nullptr;
     std::unique_ptr<rive::ThreadedScene> m_scene;
+    void* m_wrappedArtboard = nullptr;
+    void* m_wrappedMachine = nullptr;
     float m_devicePixelRatio = 1.0f;
     std::atomic<bool> m_fatalError{false};
     std::atomic<bool> m_paused{false};
@@ -277,21 +308,22 @@ EXPORT void* riveThreadedCreate(
     auto* renderTexture =
         static_cast<AndroidRenderTexture*>(androidRenderTexturePtr);
 
-    // Take ownership: wrap raw pointers in unique_ptr.
-    // The caller (Dart) must NOT use these pointers after this call.
+    auto* wrappedArtboard = artboardPtr;
+    auto* wrappedMachine = stateMachinePtr;
+
     auto artboard = std::unique_ptr<rive::ArtboardInstance>(
-        static_cast<rive::ArtboardInstance*>(artboardPtr));
+        static_cast<rive::ArtboardInstance*>(
+            riveThreadedTakeArtboard(wrappedArtboard)));
     auto stateMachine = std::unique_ptr<rive::StateMachineInstance>(
-        static_cast<rive::StateMachineInstance*>(stateMachinePtr));
+        static_cast<rive::StateMachineInstance*>(
+            riveThreadedTakeStateMachine(wrappedMachine)));
 
     rive::rcp<rive::ViewModelInstanceRuntime> vmi;
     if (viewModelInstancePtr)
     {
-        // ViewModelInstanceRuntime is ref-counted — add a ref since we're
-        // taking shared ownership (the Dart side may still hold a ref).
         auto* raw = static_cast<rive::ViewModelInstanceRuntime*>(
-            viewModelInstancePtr);
-        vmi = rive::rcp<rive::ViewModelInstanceRuntime>(rive::ref_rcp(raw));
+            riveThreadedRefViewModelInstance(viewModelInstancePtr));
+        vmi = rive::rcp<rive::ViewModelInstanceRuntime>(raw);
     }
 
     auto binding = ThreadedSceneBinding::create(
@@ -303,7 +335,13 @@ EXPORT void* riveThreadedCreate(
         height,
         devicePixelRatio);
 
-    return binding ? binding.release() : nullptr;
+    if (!binding)
+    {
+        return nullptr;
+    }
+
+    binding->takeTransferredWrappers(wrappedArtboard, wrappedMachine);
+    return binding.release();
 }
 
 EXPORT void riveThreadedDestroy(void* bindingPtr)
@@ -467,6 +505,8 @@ EXPORT int riveThreadedAcquireSnapshot(
     thread_local std::vector<std::string> stringValues;
     snapshot = binding->scene()->acquireViewModelSnapshot();
     stringValues.clear();
+    stringValues.reserve(
+        std::min(snapshot.size(), static_cast<size_t>(maxProperties)));
 
     int count = 0;
     for (const auto& [name, value] : snapshot)
@@ -538,6 +578,8 @@ EXPORT int riveThreadedAcquireFrame(
     events.clear();
     propValues.clear();
     binding->scene()->acquireFrame(snapshot, events);
+    propValues.reserve(
+        std::min(snapshot.size(), static_cast<size_t>(maxProperties)));
 
     int propCount = 0;
     for (const auto& [name, value] : snapshot)
@@ -645,4 +687,3 @@ EXPORT bool riveThreadedHasFatalError(void* bindingPtr)
     auto* binding = static_cast<ThreadedSceneBinding*>(bindingPtr);
     return binding && binding->hasFatalError();
 }
-

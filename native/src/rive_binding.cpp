@@ -368,6 +368,11 @@ ArtboardInstance* WrappedArtboard::artboard()
     return m_artboard.get();
 }
 
+std::unique_ptr<ArtboardInstance> WrappedArtboard::releaseArtboard()
+{
+    return std::move(m_artboard);
+}
+
 class WrappedStateMachine : public RefCnt<WrappedStateMachine>
 {
 public:
@@ -422,6 +427,15 @@ public:
     }
 
     StateMachineInstance* stateMachine() { return m_stateMachine.get(); }
+
+    std::unique_ptr<StateMachineInstance> releaseStateMachine()
+    {
+        if (m_stateMachine != nullptr && m_wrappedArtboard != nullptr)
+        {
+            m_stateMachine->removeNestedEventListener(m_wrappedArtboard.get());
+        }
+        return std::move(m_stateMachine);
+    }
 
     WrappedArtboard* wrappedArtboard()
     {
@@ -5012,6 +5026,54 @@ EXPORT void deleteStateMachineInstance(WrappedStateMachine* wrappedMachine)
     _webInputChangedCallbacks.erase(wrappedMachine->stateMachine());
 #endif
     wrappedMachine->unref();
+}
+
+EXPORT void* riveThreadedTakeArtboard(void* wrappedArtboardPtr)
+{
+    auto* wrappedArtboard =
+        static_cast<WrappedArtboard*>(wrappedArtboardPtr);
+    if (wrappedArtboard == nullptr)
+    {
+        return nullptr;
+    }
+    return wrappedArtboard->releaseArtboard().release();
+}
+
+EXPORT void* riveThreadedTakeStateMachine(void* wrappedMachinePtr)
+{
+    auto* wrappedMachine =
+        static_cast<WrappedStateMachine*>(wrappedMachinePtr);
+    if (wrappedMachine == nullptr)
+    {
+        return nullptr;
+    }
+    return wrappedMachine->releaseStateMachine().release();
+}
+
+EXPORT void* riveThreadedRefViewModelInstance(void* wrappedVMIPtr)
+{
+    auto* wrappedVMI = static_cast<WrappedVMIRuntime*>(wrappedVMIPtr);
+    if (wrappedVMI == nullptr)
+    {
+        return nullptr;
+    }
+    auto* instance = wrappedVMI->instance();
+    if (instance != nullptr)
+    {
+        instance->ref();
+    }
+    return instance;
+}
+
+EXPORT void riveThreadedReleaseArtboardWrapper(void* wrappedArtboardPtr)
+{
+    deleteArtboardInstance(static_cast<WrappedArtboard*>(wrappedArtboardPtr));
+}
+
+EXPORT void riveThreadedReleaseStateMachineWrapper(void* wrappedMachinePtr)
+{
+    deleteStateMachineInstance(
+        static_cast<WrappedStateMachine*>(wrappedMachinePtr));
 }
 
 EXPORT WrappedInput* stateMachineInput(WrappedStateMachine* wrappedMachine,

@@ -6,6 +6,8 @@
 #include "rive/animation/linear_animation_instance.hpp"
 #include "rive/animation/state_machine_instance.hpp"
 
+#include <memory>
+
 class WrappedArtboard;
 typedef void (*EventCallback)(WrappedArtboard* wrapper, uint32_t);
 
@@ -45,6 +47,7 @@ public:
     void addDataBind(WrappedDataBind* dataBind);
     void deleteDataBinds();
     rive::ArtboardInstance* artboard();
+    std::unique_ptr<rive::ArtboardInstance> releaseArtboard();
     EventCallback m_eventCallback = nullptr;
 
     rive::rcp<rive::File> file() { return m_file; }
