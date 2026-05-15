@@ -463,12 +463,12 @@ private:
     bool m_scheduledDestruction = false;
 
 public:
-    static std::unique_ptr<EGLThreadState> threadState;
+    static thread_local std::unique_ptr<EGLThreadState> threadState;
 
     rive::Renderer* renderer() { return m_plsRenderer.get(); }
 };
 
-std::unique_ptr<EGLThreadState> AndroidRenderTexture::threadState;
+thread_local std::unique_ptr<EGLThreadState> AndroidRenderTexture::threadState;
 
 EXPORT rive::Factory* riveFactory()
 {
