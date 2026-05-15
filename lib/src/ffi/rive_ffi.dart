@@ -2374,6 +2374,21 @@ class FFIRiveViewModelInstanceRuntime
     _pointer = nullptr;
   }
 
+  /// Transfers native ownership of this view model instance to C++ (e.g. to
+  /// [riveThreadedCreate]). Detaches the [NativeFinalizer] and nulls the
+  /// pointer so a subsequent [dispose] is a no-op. Read [pointer] BEFORE
+  /// calling this to capture the C++ handle. After this call the Dart object
+  /// is invalid and must not be used.
+  ///
+  /// The C++ handle remains valid as long as the caller keeps the underlying
+  /// ViewModelInstanceRuntime ref-counted (e.g. via
+  /// `riveThreadedRefViewModelInstance`).
+  void releaseNativeOwnership() {
+    if (_pointer == nullptr) return;
+    _finalizer.detach(this);
+    _pointer = nullptr;
+  }
+
   @override
   bool get isDisposed => _pointer == nullptr;
 }

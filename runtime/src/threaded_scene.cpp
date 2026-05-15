@@ -398,12 +398,12 @@ bool ThreadedScene::applyInputEvents()
                     }
                     else
                     {
-                        logMissing("setViewModelEnum", event.inputName);
+                        logMissing("setViewModelEnum[prop-null]", event.inputName);
                     }
                 }
                 else
                 {
-                    logMissing("setViewModelEnum", event.inputName);
+                    logMissing("setViewModelEnum[vmi-null]", event.inputName);
                 }
                 break;
             case ThreadedInputEvent::setViewModelNumber:
@@ -416,12 +416,12 @@ bool ThreadedScene::applyInputEvents()
                     }
                     else
                     {
-                        logMissing("setViewModelNumber", event.inputName);
+                        logMissing("setViewModelNumber[prop-null]", event.inputName);
                     }
                 }
                 else
                 {
-                    logMissing("setViewModelNumber", event.inputName);
+                    logMissing("setViewModelNumber[vmi-null]", event.inputName);
                 }
                 break;
             case ThreadedInputEvent::setViewModelBool:
@@ -434,12 +434,12 @@ bool ThreadedScene::applyInputEvents()
                     }
                     else
                     {
-                        logMissing("setViewModelBool", event.inputName);
+                        logMissing("setViewModelBool[prop-null]", event.inputName);
                     }
                 }
                 else
                 {
-                    logMissing("setViewModelBool", event.inputName);
+                    logMissing("setViewModelBool[vmi-null]", event.inputName);
                 }
                 break;
             case ThreadedInputEvent::setViewModelString:
@@ -452,12 +452,12 @@ bool ThreadedScene::applyInputEvents()
                     }
                     else
                     {
-                        logMissing("setViewModelString", event.inputName);
+                        logMissing("setViewModelString[prop-null]", event.inputName);
                     }
                 }
                 else
                 {
-                    logMissing("setViewModelString", event.inputName);
+                    logMissing("setViewModelString[vmi-null]", event.inputName);
                 }
                 break;
             case ThreadedInputEvent::fireViewModelTrigger:
@@ -470,12 +470,12 @@ bool ThreadedScene::applyInputEvents()
                     }
                     else
                     {
-                        logMissing("fireViewModelTrigger", event.inputName);
+                        logMissing("fireViewModelTrigger[prop-null]", event.inputName);
                     }
                 }
                 else
                 {
-                    logMissing("fireViewModelTrigger", event.inputName);
+                    logMissing("fireViewModelTrigger[vmi-null]", event.inputName);
                 }
                 break;
         }
