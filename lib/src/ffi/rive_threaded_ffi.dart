@@ -19,6 +19,9 @@ typedef _CreateNative =
       Int32 width,
       Int32 height,
       Float devicePixelRatio,
+      Int32 fit,
+      Float alignmentX,
+      Float alignmentY,
     );
 typedef _CreateDart =
     Pointer<Void> Function(
@@ -29,6 +32,9 @@ typedef _CreateDart =
       int width,
       int height,
       double devicePixelRatio,
+      int fit,
+      double alignmentX,
+      double alignmentY,
     );
 
 typedef _DestroyNative = Void Function(Pointer<Void> binding);
@@ -298,6 +304,12 @@ class RiveThreadedBindings {
 
   RiveThreadedBindings._(this._ptr);
 
+  /// [fit] is the index of the Rive `Fit` enum (matches the C++
+  /// `rive::Fit` ordering: 0=fill, 1=contain, 2=cover, 3=fitWidth,
+  /// 4=fitHeight, 5=none, 6=scaleDown, 7=layout).
+  ///
+  /// [alignmentX] / [alignmentY] are the x/y components of a Rive `Alignment`
+  /// (each in [-1, 1]; center = (0, 0), topLeft = (-1, -1)).
   static RiveThreadedBindings? create({
     required Pointer<Void> metalTextureRenderer,
     required Pointer<Void> artboard,
@@ -306,6 +318,9 @@ class RiveThreadedBindings {
     required int width,
     required int height,
     required double devicePixelRatio,
+    int fit = 1, // Fit.contain
+    double alignmentX = 0.0,
+    double alignmentY = 0.0,
   }) {
     final ptr = _create(
       metalTextureRenderer,
@@ -315,6 +330,9 @@ class RiveThreadedBindings {
       width,
       height,
       devicePixelRatio,
+      fit,
+      alignmentX,
+      alignmentY,
     );
     if (ptr == nullptr || ptr.address == 0) return null;
     return RiveThreadedBindings._(ptr);
