@@ -6,8 +6,11 @@
 #include "rive/threaded_scene.hpp"
 #include "rive/artboard.hpp"
 #include "rive/animation/state_machine_instance.hpp"
-#include "rive/renderer/rive_renderer.hpp"
+#include "rive/layout.hpp"
+#include "rive/math/aabb.hpp"
 #include "rive/math/mat2d.hpp"
+#include "rive/renderer.hpp"
+#include "rive/renderer/rive_renderer.hpp"
 
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
@@ -51,7 +54,9 @@ public:
         rive::rcp<rive::ViewModelInstanceRuntime> viewModelInstance,
         int width,
         int height,
-        float devicePixelRatio)
+        float devicePixelRatio,
+        rive::Fit fit,
+        rive::Alignment alignment)
     {
         if (!renderTexture || !artboard || !stateMachine)
         {
@@ -108,10 +113,16 @@ public:
             std::move(artboard),
             std::move(stateMachine),
             config,
-            [renderTexturePtr, abWidth, abHeight, dpr, fatalFlag, pausedFlag](
-                rive::ArtboardInstance* ab,
-                int w,
-                int h) -> rive::rcp<rive::RenderImage> {
+            [renderTexturePtr,
+             abWidth,
+             abHeight,
+             dpr,
+             fit,
+             alignment,
+             fatalFlag,
+             pausedFlag](rive::ArtboardInstance* ab,
+                         int w,
+                         int h) -> rive::rcp<rive::RenderImage> {
                 if (fatalFlag->load(std::memory_order_acquire))
                 {
                     return nullptr;
@@ -173,10 +184,19 @@ public:
                     fatalFlag->store(true, std::memory_order_release);
                     return nullptr;
                 }
+                // `w` / `h` are physical pixels (logical size × devicePixelRatio).
+                // computeAlignment() maps the artboard's content box into the
+                // frame's pixel box; no additional dpr multiplier is needed.
+                rive::AABB frame(0.0f,
+                                 0.0f,
+                                 static_cast<float>(w),
+                                 static_cast<float>(h));
+                rive::AABB content(0.0f, 0.0f, abWidth, abHeight);
+                rive::Mat2D transform =
+                    rive::computeAlignment(fit, alignment, frame, content);
+
                 riveRenderer->save();
-                riveRenderer->transform(rive::Mat2D::fromScale(
-                    static_cast<float>(w) / abWidth * dpr,
-                    static_cast<float>(h) / abHeight * dpr));
+                riveRenderer->transform(transform);
                 ab->draw(riveRenderer);
                 riveRenderer->restore();
                 bool flushOk = flush(renderTexturePtr, dpr);
@@ -307,7 +327,10 @@ EXPORT void* riveThreadedCreate(
     void* viewModelInstancePtr,
     int width,
     int height,
-    float devicePixelRatio)
+    float devicePixelRatio,
+    int fit,
+    float alignmentX,
+    float alignmentY)
 {
     auto* renderTexture =
         static_cast<AndroidRenderTexture*>(androidRenderTexturePtr);
@@ -337,7 +360,9 @@ EXPORT void* riveThreadedCreate(
         std::move(vmi),
         width,
         height,
-        devicePixelRatio);
+        devicePixelRatio,
+        static_cast<rive::Fit>(fit),
+        rive::Alignment(alignmentX, alignmentY));
 
     if (!binding)
     {

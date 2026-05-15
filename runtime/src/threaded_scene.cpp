@@ -550,6 +550,10 @@ void ThreadedScene::runOneFrame(float dt)
     // throw (EGL/GL failures surfaced as exceptions, bad_alloc from rcp, etc.).
     // An uncaught exception out of threadMain would call std::terminate and
     // bypass the FFI fatal-error path, so contain it here and stop the loop.
+    // The Android Rive build sets -fno-exceptions; on that configuration the
+    // try/catch is unavailable, so the body runs unguarded. The render
+    // callback there marks fatal status via the binding-level atomic instead
+    // of throwing.
     try
     {
 #endif
