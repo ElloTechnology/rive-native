@@ -122,6 +122,9 @@ typedef _IsRunningDart = bool Function(Pointer<Void> binding);
 typedef _HasFatalErrorNative = Bool Function(Pointer<Void> binding);
 typedef _HasFatalErrorDart = bool Function(Pointer<Void> binding);
 
+typedef _Uint64QueryNative = Uint64 Function(Pointer<Void> binding);
+typedef _Uint64QueryDart = int Function(Pointer<Void> binding);
+
 // Combined snapshot + events (single mutex acquisition)
 typedef _AcquireFrameNative =
     Int32 Function(
@@ -244,6 +247,16 @@ final _HasFatalErrorDart _hasFatalError = _lib
       'riveThreadedHasFatalError',
     );
 
+final _Uint64QueryDart _advanceCount = _lib
+    .lookupFunction<_Uint64QueryNative, _Uint64QueryDart>(
+      'riveThreadedAdvanceCount',
+    );
+
+final _Uint64QueryDart _renderedCount = _lib
+    .lookupFunction<_Uint64QueryNative, _Uint64QueryDart>(
+      'riveThreadedRenderedCount',
+    );
+
 final _AcquireFrameDart _acquireFrame = _lib
     .lookupFunction<_AcquireFrameNative, _AcquireFrameDart>(
       'riveThreadedAcquireFrame',
@@ -356,6 +369,17 @@ class RiveThreadedBindings {
   /// once set, the bg worker is permanently halted and a sync remount is the
   /// only recovery.
   bool get hasFatalError => _ptr != null && _hasFatalError(_ptr!);
+
+  /// Total bg-thread cycles completed since this binding was created. Bumped
+  /// once per `runOneFrame` (state-machine advance + snapshot + event
+  /// collection), regardless of whether the render callback produced an
+  /// image. Diverges from [renderedCount] once the render callback no-ops
+  /// (zero-size surface, paused worker, damage tracking).
+  int get advanceCount => _ptr == null ? 0 : _advanceCount(_ptr!);
+
+  /// Total bg-thread cycles that produced a new RenderImage. Subset of
+  /// [advanceCount].
+  int get renderedCount => _ptr == null ? 0 : _renderedCount(_ptr!);
 
   void dispose() {
     if (_ptr != null) {
