@@ -570,6 +570,8 @@ void ThreadedScene::runOneFrame(float dt)
             newImage = m_renderCallback(m_artboard.get(), w, h);
         }
 
+        const bool produced = static_cast<bool>(newImage);
+
         // Swap cached image, ViewModel snapshot, and reported events
         // together under one lock so the render thread sees a coherent
         // triple from this bg cycle (event A and the snapshot reflecting
@@ -596,6 +598,12 @@ void ThreadedScene::runOneFrame(float dt)
                     std::make_move_iterator(m_pendingEvents.end()));
                 m_pendingEvents.clear();
             }
+        }
+
+        m_advanceCount.fetch_add(1, std::memory_order_relaxed);
+        if (produced)
+        {
+            m_renderedCount.fetch_add(1, std::memory_order_relaxed);
         }
 #if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
     }

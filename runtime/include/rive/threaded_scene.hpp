@@ -237,6 +237,23 @@ public:
         return m_fatalError.load(std::memory_order_acquire);
     }
 
+    // Total bg-thread cycles completed (state-machine advance + snapshot +
+    // event collection + optional render callback). Bumped once per
+    // runOneFrame, including cycles where the render callback was skipped
+    // (e.g. zero-size surface, no callback registered) or returned nullptr.
+    uint64_t advanceCount() const
+    {
+        return m_advanceCount.load(std::memory_order_relaxed);
+    }
+
+    // Total bg-thread cycles that produced a new RenderImage (render
+    // callback ran and returned non-null). Diverges from advanceCount when
+    // the bg thread advances state without producing a new frame.
+    uint64_t renderedCount() const
+    {
+        return m_renderedCount.load(std::memory_order_relaxed);
+    }
+
 private:
     void threadMain();
     void pushEvent(ThreadedInputEvent event);
@@ -278,6 +295,8 @@ private:
     std::thread m_thread;
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_fatalError{false};
+    std::atomic<uint64_t> m_advanceCount{0};
+    std::atomic<uint64_t> m_renderedCount{0};
     std::mutex m_wakeMutex;
     std::condition_variable m_wakeCV;
     bool m_wakeFlag = false; // protected by m_wakeMutex

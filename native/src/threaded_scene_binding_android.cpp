@@ -716,3 +716,25 @@ EXPORT bool riveThreadedHasFatalError(void* bindingPtr)
     auto* binding = static_cast<ThreadedSceneBinding*>(bindingPtr);
     return binding && binding->hasFatalError();
 }
+
+// Bg-thread cycle counters. advance bumps every `runOneFrame` (state-machine
+// advance + snapshot + event collection ran); rendered bumps only when the
+// render callback produced a new RenderImage. Both diverge once damage
+// tracking lands or the render callback no-ops (zero-size surface, paused
+// worker). Used by the bench harness to expose decoupled "rive frames" vs
+// flutter frames in the [BenchFps] log line.
+EXPORT uint64_t riveThreadedAdvanceCount(void* bindingPtr)
+{
+    auto* binding = static_cast<ThreadedSceneBinding*>(bindingPtr);
+    if (!binding || !binding->scene())
+        return 0;
+    return binding->scene()->advanceCount();
+}
+
+EXPORT uint64_t riveThreadedRenderedCount(void* bindingPtr)
+{
+    auto* binding = static_cast<ThreadedSceneBinding*>(bindingPtr);
+    if (!binding || !binding->scene())
+        return 0;
+    return binding->scene()->renderedCount();
+}
