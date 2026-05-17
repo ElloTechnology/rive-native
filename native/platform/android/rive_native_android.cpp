@@ -380,8 +380,18 @@ public:
             auto renderContext = threadState->renderContext();
             if (renderContext == nullptr)
             {
-                LOGW("Rive AndroidRenderTexture Rive Renderer (PLS) not "
-                     "supported");
+                LOGE("Rive AndroidRenderTexture: Renderer (PLS) NOT "
+                     "supported on this device (surface=%dx%d). The "
+                     "threaded path will silently no-op every render "
+                     "cycle from now on — m_plsRenderer stays null, "
+                     "makeRenderer() returns null, the bg callback hits "
+                     "its 'makeRenderer returned null' branch and marks "
+                     "fatal. Only viable mitigation is to disable "
+                     "threaded rendering for this device (ThreadedRive"
+                     "BenchMode.forceSyncRendering, or the throttle "
+                     "config disableThreadedRiveAdvance flag).",
+                     m_width,
+                     m_height);
                 return true; // PLS was not supported.
             }
             int width = ANativeWindow_getWidth(m_surfaceWindow);
