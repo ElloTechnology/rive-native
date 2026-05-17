@@ -120,15 +120,23 @@ public:
              fit,
              alignment,
              fatalFlag,
-             pausedFlag](rive::ArtboardInstance* ab,
-                         int w,
-                         int h) -> rive::rcp<rive::RenderImage> {
+             pausedFlag,
+             gpuRenderCount = &binding->m_gpuRenderCount,
+             consecFailures = &binding->m_consecutiveRenderFailures](
+                rive::ArtboardInstance* ab,
+                int w,
+                int h) -> rive::rcp<rive::RenderImage> {
                 if (fatalFlag->load(std::memory_order_acquire))
                 {
+                    consecFailures->fetch_add(
+                        1, std::memory_order_relaxed);
                     return nullptr;
                 }
                 if (pausedFlag->load(std::memory_order_acquire))
                 {
+                    // Paused is a healthy state, not a failure — don't bump
+                    // consecFailures or renderStalled() would trip every
+                    // time the worker is intentionally idle.
                     return nullptr;
                 }
 
@@ -140,6 +148,8 @@ public:
                             "(likely EGL/GL failure, possibly "
                             "EGL_CONTEXT_LOST — see RiveNative logcat)");
                     fatalFlag->store(true, std::memory_order_release);
+                    consecFailures->fetch_add(
+                        1, std::memory_order_relaxed);
                     return nullptr;
                 }
 
@@ -180,8 +190,15 @@ public:
                 auto* riveRenderer = makeRenderer(renderTexturePtr);
                 if (!riveRenderer)
                 {
-                    BG_LOGE("makeRenderer() returned null; marking fatal");
+                    BG_LOGE(
+                        "makeRenderer() returned null; marking fatal "
+                        "(AndroidRenderTexture::m_plsRenderer is "
+                        "uninitialized — most likely PLS unavailable on "
+                        "this GL driver; look for 'Rive Renderer (PLS) "
+                        "NOT supported' in earlier logcat)");
                     fatalFlag->store(true, std::memory_order_release);
+                    consecFailures->fetch_add(
+                        1, std::memory_order_relaxed);
                     return nullptr;
                 }
                 // `w` / `h` are physical pixels (logical size × devicePixelRatio).
@@ -237,7 +254,17 @@ public:
                             "(likely EGL/GL failure, possibly "
                             "EGL_CONTEXT_LOST — see RiveNative logcat)");
                     fatalFlag->store(true, std::memory_order_release);
+                    consecFailures->fetch_add(
+                        1, std::memory_order_relaxed);
+                    return nullptr;
                 }
+                // Success path — reached only when clear + makeRenderer +
+                // flush all succeeded. The texture now holds the painted
+                // frame; the rcp return is unused on Android (GPU-direct
+                // path), so the upstream ThreadedScene::renderedCount
+                // can't see this success. Track it here instead.
+                gpuRenderCount->fetch_add(1, std::memory_order_relaxed);
+                consecFailures->store(0, std::memory_order_relaxed);
                 return nullptr; // GPU path — texture IS the output
             },
             std::move(viewModelInstance));
@@ -282,6 +309,23 @@ public:
         m_wrappedMachine = wrappedMachine;
     }
 
+    // Authoritative "frame painted" counter for Android. The bg render
+    // callback always returns nullptr on this platform (GPU-direct path —
+    // texture IS the output), so ThreadedScene::renderedCount() is
+    // uniformly 0 here. Use this instead.
+    uint64_t gpuRenderCount() const
+    {
+        return m_gpuRenderCount.load(std::memory_order_relaxed);
+    }
+
+    // Consecutive bg cycles where the render callback failed (any of
+    // clear/makeRenderer/flush returned false, OR a paused/fatal short-
+    // circuit hit). Resets to 0 on each successful render.
+    uint64_t consecutiveRenderFailures() const
+    {
+        return m_consecutiveRenderFailures.load(std::memory_order_relaxed);
+    }
+
 private:
     ThreadedSceneBinding() = default;
 
@@ -306,6 +350,13 @@ private:
     float m_devicePixelRatio = 1.0f;
     std::atomic<bool> m_fatalError{false};
     std::atomic<bool> m_paused{false};
+
+    // GPU-render success tracking. m_renderCallback always returns nullptr
+    // on Android, so ThreadedScene::m_renderedCount never bumps. Track real
+    // success here: bumped on full clear+makeRenderer+flush OK, consec
+    // resets to 0 on success and increments on any failure path.
+    std::atomic<uint64_t> m_gpuRenderCount{0};
+    std::atomic<uint64_t> m_consecutiveRenderFailures{0};
 };
 
 } // namespace rive_flutter
@@ -737,4 +788,46 @@ EXPORT uint64_t riveThreadedRenderedCount(void* bindingPtr)
     if (!binding || !binding->scene())
         return 0;
     return binding->scene()->renderedCount();
+}
+
+// Real GPU render success count on Android. Bumps each time clear +
+// makeRenderer + flush all succeed in the bg-thread render callback. Use
+// this in place of riveThreadedRenderedCount on Android — that one counts
+// in-memory RenderImage returns from the callback, which the Android
+// binding never produces (GPU-direct path; texture is the output, not an
+// rcp<RenderImage>). On iOS / other platforms with returning callbacks
+// this getter returns 0 (counter is incremented only from the Android
+// binding); use riveThreadedRenderedCount there.
+EXPORT uint64_t riveThreadedGpuRenderCount(void* bindingPtr)
+{
+    auto* binding = static_cast<ThreadedSceneBinding*>(bindingPtr);
+    if (!binding)
+        return 0;
+    return binding->gpuRenderCount();
+}
+
+// Number of consecutive bg cycles where the render callback failed
+// (fatal short-circuit, or clear/makeRenderer/flush returned false).
+// Resets to 0 on each successful render. Paused cycles do NOT count as
+// failures. Crossing the threshold used by riveThreadedRenderStalled
+// signals the threaded path is silently dead even when hasFatalError is
+// still false (most common cause: PLS unsupported on the device's GL
+// driver — look for "Rive Renderer (PLS) NOT supported" in logcat).
+EXPORT uint64_t riveThreadedConsecutiveRenderFailures(void* bindingPtr)
+{
+    auto* binding = static_cast<ThreadedSceneBinding*>(bindingPtr);
+    if (!binding)
+        return 0;
+    return binding->consecutiveRenderFailures();
+}
+
+// True after 30+ consecutive failed bg cycles (~500ms at 60Hz). Distinct
+// from hasFatalError: a stall doesn't mark the worker as dead (the SM
+// keeps advancing) — it just signals nothing is being painted.
+EXPORT bool riveThreadedRenderStalled(void* bindingPtr)
+{
+    auto* binding = static_cast<ThreadedSceneBinding*>(bindingPtr);
+    if (!binding)
+        return false;
+    return binding->consecutiveRenderFailures() > 30;
 }

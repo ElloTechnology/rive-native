@@ -565,9 +565,24 @@ void ThreadedScene::runOneFrame(float dt)
         int h = m_height.load(std::memory_order_relaxed);
 
         rcp<RenderImage> newImage;
-        if (m_renderCallback && w > 0 && h > 0)
+        const bool sized = (w > 0 && h > 0);
+        if (m_renderCallback && sized)
         {
             newImage = m_renderCallback(m_artboard.get(), w, h);
+        }
+        else if (m_renderCallback && !sized && m_logWarning)
+        {
+            // Surface not yet sized (or torn down): the callback can't
+            // produce a frame. Rate-limited to once per ~second on a 60Hz
+            // worker so it surfaces during layout races without drowning
+            // logcat when a surface stays at 0×0 for long stretches.
+            if ((m_advanceCount.load(std::memory_order_relaxed) % 60) == 0)
+            {
+                m_logWarning(
+                    "ThreadedScene: zero-size surface (w=" +
+                    std::to_string(w) + " h=" + std::to_string(h) +
+                    "), skipping render this cycle");
+            }
         }
 
         const bool produced = static_cast<bool>(newImage);

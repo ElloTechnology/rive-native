@@ -257,6 +257,21 @@ final _Uint64QueryDart _renderedCount = _lib
       'riveThreadedRenderedCount',
     );
 
+final _Uint64QueryDart _gpuRenderCount = _lib
+    .lookupFunction<_Uint64QueryNative, _Uint64QueryDart>(
+      'riveThreadedGpuRenderCount',
+    );
+
+final _Uint64QueryDart _consecutiveRenderFailures = _lib
+    .lookupFunction<_Uint64QueryNative, _Uint64QueryDart>(
+      'riveThreadedConsecutiveRenderFailures',
+    );
+
+final _HasFatalErrorDart _renderStalled = _lib
+    .lookupFunction<_HasFatalErrorNative, _HasFatalErrorDart>(
+      'riveThreadedRenderStalled',
+    );
+
 final _AcquireFrameDart _acquireFrame = _lib
     .lookupFunction<_AcquireFrameNative, _AcquireFrameDart>(
       'riveThreadedAcquireFrame',
@@ -379,7 +394,33 @@ class RiveThreadedBindings {
 
   /// Total bg-thread cycles that produced a new RenderImage. Subset of
   /// [advanceCount].
+  ///
+  /// **On Android this is uniformly 0** — the bg render callback is
+  /// GPU-direct (the texture is the output) and always returns
+  /// `nullptr`, so the upstream counter never bumps. Use
+  /// [gpuRenderCount] on Android instead.
   int get renderedCount => _ptr == null ? 0 : _renderedCount(_ptr!);
+
+  /// Total bg-thread cycles where `clear` + `makeRenderer` + `flush` all
+  /// succeeded. The authoritative "frame painted" counter on Android.
+  /// Zero on platforms whose render callback returns an in-memory image
+  /// (use [renderedCount] there).
+  int get gpuRenderCount => _ptr == null ? 0 : _gpuRenderCount(_ptr!);
+
+  /// Consecutive bg cycles where the render callback failed (fatal
+  /// short-circuit, or any of clear/makeRenderer/flush returned false).
+  /// Resets to 0 on each successful render. Paused cycles don't count
+  /// as failures.
+  int get consecutiveRenderFailures =>
+      _ptr == null ? 0 : _consecutiveRenderFailures(_ptr!);
+
+  /// True after 30+ consecutive failed bg cycles (~500ms at 60Hz).
+  /// Distinct from [hasFatalError]: a stall doesn't halt the worker
+  /// (the state machine keeps advancing) — it just signals nothing is
+  /// being painted. The most common cause on Android is the device's
+  /// GL driver not supporting PLS — look for `Rive AndroidRenderTexture:
+  /// Renderer (PLS) NOT supported` in logcat at error level.
+  bool get renderStalled => _ptr != null && _renderStalled(_ptr!);
 
   void dispose() {
     if (_ptr != null) {
