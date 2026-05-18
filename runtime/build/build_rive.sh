@@ -247,8 +247,13 @@ export PATH="$PREMAKE_INSTALL_DIR:$PATH"
 export PREMAKE_PATH="$SCRIPT_DIR"
 
 # Setup premake-ninja.
+# Check for .git rather than just the directory — an empty placeholder dir
+# (e.g. from an interrupted clone, or stale repo state) would otherwise
+# skip this clone and the premake5 ninja action fails with "module 'ninja'
+# not found". Same pattern as the premake-core check above.
 if [[ $RIVE_BUILD_SYSTEM = "ninja" ]]; then
-    if [ ! -d premake-ninja ]; then
+    if [ ! -d premake-ninja/.git ]; then
+        rm -rf premake-ninja
         git clone --branch rive_modifications https://github.com/rive-app/premake-ninja.git
     fi
     export PREMAKE_PATH="$SCRIPT_DIR/dependencies/premake-ninja:$PREMAKE_PATH"
@@ -256,7 +261,8 @@ fi
 
 # Setup premake-export-compile-commands.
 if [[ $RIVE_BUILD_SYSTEM = "export-compile-commands" ]]; then
-    if [ ! -d premake-export-compile-commands ]; then
+    if [ ! -d premake-export-compile-commands/.git ]; then
+        rm -rf premake-export-compile-commands
         git clone --branch more_cpp_support https://github.com/rive-app/premake-export-compile-commands.git
     fi
     export PREMAKE_PATH="$SCRIPT_DIR/dependencies/premake-export-compile-commands:$PREMAKE_PATH"
