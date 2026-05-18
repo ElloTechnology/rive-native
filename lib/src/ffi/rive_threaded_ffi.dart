@@ -330,6 +330,22 @@ class SnapshotEntry {
 class RiveThreadedBindings {
   Pointer<Void>? _ptr;
 
+  // Per-controller acquireFrame buffer cache. Allocated lazily on first call,
+  // grown if a later call requests a larger cap, freed in [dispose]. acquireFrame
+  // is single-threaded per controller (called from the Flutter UI thread only),
+  // so no synchronization is needed around the cache. The eventCount slot is
+  // allocated at first use and lives until dispose.
+  Pointer<Pointer<Utf8>>? _bufPropNames;
+  Pointer<Pointer<Utf8>>? _bufPropValues;
+  Pointer<Int32>? _bufPropTypes;
+  int _bufPropCap = 0;
+
+  Pointer<Pointer<Utf8>>? _bufEventNames;
+  Pointer<Float>? _bufEventDelays;
+  int _bufEventCap = 0;
+
+  Pointer<Int32>? _bufEventCount;
+
   RiveThreadedBindings._(this._ptr);
 
   /// [fit] is the index of the Rive `Fit` enum (matches the C++
@@ -427,6 +443,52 @@ class RiveThreadedBindings {
       _destroy(_ptr!);
       _ptr = null;
     }
+    if (_bufPropNames != null) {
+      calloc.free(_bufPropNames!);
+      calloc.free(_bufPropValues!);
+      calloc.free(_bufPropTypes!);
+      _bufPropNames = null;
+      _bufPropValues = null;
+      _bufPropTypes = null;
+      _bufPropCap = 0;
+    }
+    if (_bufEventNames != null) {
+      calloc.free(_bufEventNames!);
+      calloc.free(_bufEventDelays!);
+      _bufEventNames = null;
+      _bufEventDelays = null;
+      _bufEventCap = 0;
+    }
+    if (_bufEventCount != null) {
+      calloc.free(_bufEventCount!);
+      _bufEventCount = null;
+    }
+  }
+
+  void _ensurePropBuffers(int cap) {
+    if (cap <= _bufPropCap && _bufPropNames != null) return;
+    if (_bufPropNames != null) {
+      calloc.free(_bufPropNames!);
+      calloc.free(_bufPropValues!);
+      calloc.free(_bufPropTypes!);
+    }
+    final n = cap < 1 ? 1 : cap;
+    _bufPropNames = calloc<Pointer<Utf8>>(n);
+    _bufPropValues = calloc<Pointer<Utf8>>(n);
+    _bufPropTypes = calloc<Int32>(n);
+    _bufPropCap = n;
+  }
+
+  void _ensureEventBuffers(int cap) {
+    if (cap <= _bufEventCap && _bufEventNames != null) return;
+    if (_bufEventNames != null) {
+      calloc.free(_bufEventNames!);
+      calloc.free(_bufEventDelays!);
+    }
+    final n = cap < 1 ? 1 : cap;
+    _bufEventNames = calloc<Pointer<Utf8>>(n);
+    _bufEventDelays = calloc<Float>(n);
+    _bufEventCap = n;
   }
 
   // --- Per-frame ---
@@ -554,12 +616,16 @@ class RiveThreadedBindings {
   ThreadedFrame acquireFrame({int maxProperties = 64, int maxEvents = 128}) {
     if (_ptr == null) return const ThreadedFrame(properties: [], events: []);
 
-    final propNamesPtr = calloc<Pointer<Utf8>>(maxProperties);
-    final propValuesPtr = calloc<Pointer<Utf8>>(maxProperties);
-    final propTypesPtr = calloc<Int32>(maxProperties);
-    final eventNamesPtr = calloc<Pointer<Utf8>>(maxEvents);
-    final eventDelaysPtr = calloc<Float>(maxEvents);
-    final eventCountPtr = calloc<Int32>(1);
+    _ensurePropBuffers(maxProperties);
+    _ensureEventBuffers(maxEvents);
+    _bufEventCount ??= calloc<Int32>(1);
+
+    final propNamesPtr = _bufPropNames!;
+    final propValuesPtr = _bufPropValues!;
+    final propTypesPtr = _bufPropTypes!;
+    final eventNamesPtr = _bufEventNames!;
+    final eventDelaysPtr = _bufEventDelays!;
+    final eventCountPtr = _bufEventCount!;
 
     final propCount = _acquireFrame(
       _ptr!,
@@ -574,30 +640,26 @@ class RiveThreadedBindings {
     );
     final eventCount = eventCountPtr[0];
 
-    final properties = <SnapshotEntry>[];
-    for (var i = 0; i < propCount; i++) {
-      final typeInt = propTypesPtr[i];
-      properties.add(
-        SnapshotEntry(
+    final properties = List<SnapshotEntry>.generate(
+      propCount,
+      (i) {
+        final typeInt = propTypesPtr[i];
+        return SnapshotEntry(
           name: propNamesPtr[i].toDartString(),
           type: SnapshotValueType.values[typeInt.clamp(0, 3)],
           rawValue: propValuesPtr[i].toDartString(),
-        ),
-      );
-    }
-    final events = <RiveThreadedEvent>[];
-    for (var i = 0; i < eventCount; i++) {
-      events.add(
-        RiveThreadedEvent(eventNamesPtr[i].toDartString(), eventDelaysPtr[i]),
-      );
-    }
-
-    calloc.free(propNamesPtr);
-    calloc.free(propValuesPtr);
-    calloc.free(propTypesPtr);
-    calloc.free(eventNamesPtr);
-    calloc.free(eventDelaysPtr);
-    calloc.free(eventCountPtr);
+        );
+      },
+      growable: false,
+    );
+    final events = List<RiveThreadedEvent>.generate(
+      eventCount,
+      (i) => RiveThreadedEvent(
+        eventNamesPtr[i].toDartString(),
+        eventDelaysPtr[i],
+      ),
+      growable: false,
+    );
 
     return ThreadedFrame(properties: properties, events: events);
   }
