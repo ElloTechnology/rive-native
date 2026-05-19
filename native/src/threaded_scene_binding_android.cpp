@@ -90,6 +90,13 @@ public:
         // the crash propagates to the UI thread. The first visible frame is
         // delayed by one background-thread tick (~16 ms on 60 Hz devices).
         config.runFirstFrameSync = false;
+        // Push-not-poll Option B: have ThreadedScene write its per-cycle
+        // "produced Dart-visible output" flag into a binding-owned atomic
+        // before the render callback fires. The callback reads it to gate
+        // Dart_PostInteger_DL, suppressing wakes on quiet animation cycles
+        // where the worker advanced but didn't change any watched
+        // property or queue any event.
+        config.externalCycleOutputFlag = binding->cycleProducedOutputPtr();
 
         // The render callback runs on the background thread.
         // It drives AndroidRenderTexture::beginFrame/endFrame which writes
@@ -112,6 +119,8 @@ public:
         std::atomic<bool>* pausedFlag = &binding->m_paused;
         std::atomic<int64_t>* pendingPort = binding->pendingPortPtr();
         std::atomic<bool>* pendingPosted = binding->pendingPostedPtr();
+        std::atomic<bool>* cycleProducedOutput =
+            binding->cycleProducedOutputPtr();
 
         binding->m_scene = std::make_unique<rive::ThreadedScene>(
             std::move(artboard),
@@ -127,6 +136,7 @@ public:
              pausedFlag,
              pendingPort,
              pendingPosted,
+             cycleProducedOutput,
              gpuRenderCount = &binding->m_gpuRenderCount,
              consecFailures = &binding->m_consecutiveRenderFailures](
                 rive::ArtboardInstance* ab,
@@ -273,12 +283,19 @@ public:
                 consecFailures->store(0, std::memory_order_relaxed);
 
                 // Push-not-poll: notify Dart that a new bg cycle produced
-                // output. exchange returns the previous value — if it was
-                // false we just claimed the post slot; if true a prior post
-                // is still pending and Dart hasn't drained yet, so coalesce.
+                // output. Gate on `cycleProducedOutput` (set by
+                // ThreadedScene before invoking this callback) so quiet
+                // animation cycles — worker rendered but no event queued
+                // and no snapshot diff — don't trigger spurious UI-thread
+                // wakes. exchange returns the previous pendingPosted
+                // value: if it was false we just claimed the post slot;
+                // if true a prior post is still pending and Dart hasn't
+                // drained yet, so coalesce.
+                const bool drainWorthy =
+                    cycleProducedOutput->load(std::memory_order_acquire);
                 const int64_t port =
                     pendingPort->load(std::memory_order_acquire);
-                if (port != 0 &&
+                if (drainWorthy && port != 0 &&
                     !pendingPosted->exchange(true,
                                              std::memory_order_acq_rel))
                 {
@@ -370,6 +387,10 @@ public:
     // Accessors for the render-callback lambda capture.
     std::atomic<int64_t>* pendingPortPtr() { return &m_pendingPort; }
     std::atomic<bool>* pendingPostedPtr() { return &m_pendingPosted; }
+    std::atomic<bool>* cycleProducedOutputPtr()
+    {
+        return &m_cycleProducedOutput;
+    }
 
 private:
     ThreadedSceneBinding() = default;
@@ -406,8 +427,15 @@ private:
     // Push-not-poll plumbing. m_pendingPort is the Dart SendPort native
     // handle (0 = unsubscribed). m_pendingPosted gates the post so at most
     // one notification is in flight; cleared by riveThreadedAcquireFrame.
+    // m_cycleProducedOutput is written by ThreadedScene before each render
+    // callback (via Config::externalCycleOutputFlag); true iff the just-
+    // completed cycle queued events OR a snapshot diff. Bindings gate the
+    // push on it to suppress wakes for quiet animation cycles (Option B in
+    // specs/2026-05-18-android-rive-perf-iteration/plan.md §"Phase 1 step
+    // 3 — Post-cycle notification hook").
     std::atomic<int64_t> m_pendingPort{0};
     std::atomic<bool> m_pendingPosted{false};
+    std::atomic<bool> m_cycleProducedOutput{false};
 };
 
 } // namespace rive_flutter
