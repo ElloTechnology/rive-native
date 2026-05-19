@@ -12,6 +12,8 @@
 #include "rive/renderer.hpp"
 #include "rive/renderer/rive_renderer.hpp"
 
+#include "dart/dart_api_dl.h"
+
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 #include <android/log.h>
@@ -108,6 +110,8 @@ public:
         float dpr = devicePixelRatio;
         std::atomic<bool>* fatalFlag = &binding->m_fatalError;
         std::atomic<bool>* pausedFlag = &binding->m_paused;
+        std::atomic<int64_t>* pendingPort = binding->pendingPortPtr();
+        std::atomic<bool>* pendingPosted = binding->pendingPostedPtr();
 
         binding->m_scene = std::make_unique<rive::ThreadedScene>(
             std::move(artboard),
@@ -121,6 +125,8 @@ public:
              alignment,
              fatalFlag,
              pausedFlag,
+             pendingPort,
+             pendingPosted,
              gpuRenderCount = &binding->m_gpuRenderCount,
              consecFailures = &binding->m_consecutiveRenderFailures](
                 rive::ArtboardInstance* ab,
@@ -265,6 +271,19 @@ public:
                 // can't see this success. Track it here instead.
                 gpuRenderCount->fetch_add(1, std::memory_order_relaxed);
                 consecFailures->store(0, std::memory_order_relaxed);
+
+                // Push-not-poll: notify Dart that a new bg cycle produced
+                // output. exchange returns the previous value — if it was
+                // false we just claimed the post slot; if true a prior post
+                // is still pending and Dart hasn't drained yet, so coalesce.
+                const int64_t port =
+                    pendingPort->load(std::memory_order_acquire);
+                if (port != 0 &&
+                    !pendingPosted->exchange(true,
+                                             std::memory_order_acq_rel))
+                {
+                    Dart_PostInteger_DL(static_cast<Dart_Port_DL>(port), 1);
+                }
                 return nullptr; // GPU path — texture IS the output
             },
             std::move(viewModelInstance));
@@ -326,6 +345,32 @@ public:
         return m_consecutiveRenderFailures.load(std::memory_order_relaxed);
     }
 
+    // Push-not-poll: register a Dart SendPort native handle. After each bg
+    // cycle that produced output (i.e. any cycle reaching the success branch
+    // of the render callback), the worker posts an integer once, gated by
+    // m_pendingPosted so at most one notification is outstanding at a time.
+    // Dart-side clears m_pendingPosted inside riveThreadedAcquireFrame after
+    // draining; the next cycle re-arms. port=0 unsubscribes.
+    void subscribePendingPort(int64_t port)
+    {
+        m_pendingPort.store(port, std::memory_order_release);
+        m_pendingPosted.store(false, std::memory_order_release);
+    }
+
+    void unsubscribePendingPort()
+    {
+        m_pendingPort.store(0, std::memory_order_release);
+    }
+
+    void clearPendingPosted()
+    {
+        m_pendingPosted.store(false, std::memory_order_release);
+    }
+
+    // Accessors for the render-callback lambda capture.
+    std::atomic<int64_t>* pendingPortPtr() { return &m_pendingPort; }
+    std::atomic<bool>* pendingPostedPtr() { return &m_pendingPosted; }
+
 private:
     ThreadedSceneBinding() = default;
 
@@ -357,6 +402,12 @@ private:
     // resets to 0 on success and increments on any failure path.
     std::atomic<uint64_t> m_gpuRenderCount{0};
     std::atomic<uint64_t> m_consecutiveRenderFailures{0};
+
+    // Push-not-poll plumbing. m_pendingPort is the Dart SendPort native
+    // handle (0 = unsubscribed). m_pendingPosted gates the post so at most
+    // one notification is in flight; cleared by riveThreadedAcquireFrame.
+    std::atomic<int64_t> m_pendingPort{0};
+    std::atomic<bool> m_pendingPosted{false};
 };
 
 } // namespace rive_flutter
@@ -703,6 +754,13 @@ EXPORT int riveThreadedAcquireFrame(
     }
     if (outEventCount)
         *outEventCount = eventCount;
+
+    // Push-not-poll: re-arm the worker. Cleared AFTER the drain so that a
+    // worker post racing with this drain still produces a notification on
+    // the next cycle (the worker sees pendingPosted == true and skips its
+    // post; on the next cycle pendingPosted is false again and posts).
+    binding->clearPendingPosted();
+
     return propCount;
 }
 
@@ -830,4 +888,45 @@ EXPORT bool riveThreadedRenderStalled(void* bindingPtr)
     if (!binding)
         return false;
     return binding->consecutiveRenderFailures() > 30;
+}
+
+// --- Push-not-poll ---
+//
+// One-shot Dart Native API DL initialization. Must be called exactly once per
+// process before any subscribePendingPort call. Pass
+// `NativeApi.initializeApiDLData` from Dart. Returns 0 on success, -1 on
+// version mismatch (Dart_PostInteger_DL would crash otherwise).
+EXPORT intptr_t riveThreadedInitDartApiDL(void* data)
+{
+    return Dart_InitializeApiDL(data);
+}
+
+// Register a Dart SendPort (its native handle) so the worker thread posts an
+// integer (always 1) after each bg cycle that produced output. Coalesced:
+// at most one outstanding notification per binding. Dart-side clears the
+// gate inside `riveThreadedAcquireFrame`, so the next cycle re-arms.
+//
+// Resubscribing while a port is already registered replaces the port and
+// clears the posted gate (so the new port gets a fresh notification on the
+// next produce cycle).
+EXPORT void riveThreadedSubscribePendingPort(void* bindingPtr, int64_t port)
+{
+    auto* binding = static_cast<ThreadedSceneBinding*>(bindingPtr);
+    if (binding)
+    {
+        binding->subscribePendingPort(port);
+    }
+}
+
+// Stop posting to the previously-registered port. Safe to call multiple
+// times. Does not guarantee no in-flight post: a post that started before
+// this call may still be delivered to the (now closed) ReceivePort, which
+// silently drops it.
+EXPORT void riveThreadedUnsubscribePendingPort(void* bindingPtr)
+{
+    auto* binding = static_cast<ThreadedSceneBinding*>(bindingPtr);
+    if (binding)
+    {
+        binding->unsubscribePendingPort();
+    }
 }

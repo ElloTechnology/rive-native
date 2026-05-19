@@ -1,4 +1,5 @@
 import 'dart:ffi';
+import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 import 'package:rive_native/src/ffi/dynamic_library_helper.dart';
@@ -124,6 +125,17 @@ typedef _HasFatalErrorDart = bool Function(Pointer<Void> binding);
 
 typedef _Uint64QueryNative = Uint64 Function(Pointer<Void> binding);
 typedef _Uint64QueryDart = int Function(Pointer<Void> binding);
+
+// Push-not-poll
+typedef _SubscribePortNative =
+    Void Function(Pointer<Void> binding, Int64 port);
+typedef _SubscribePortDart = void Function(Pointer<Void> binding, int port);
+
+typedef _UnsubscribePortNative = Void Function(Pointer<Void> binding);
+typedef _UnsubscribePortDart = void Function(Pointer<Void> binding);
+
+typedef _InitApiDLNative = IntPtr Function(Pointer<Void> data);
+typedef _InitApiDLDart = int Function(Pointer<Void> data);
 
 // Combined snapshot + events (single mutex acquisition)
 typedef _AcquireFrameNative =
@@ -276,6 +288,28 @@ final _AcquireFrameDart _acquireFrame = _lib
     .lookupFunction<_AcquireFrameNative, _AcquireFrameDart>(
       'riveThreadedAcquireFrame',
     );
+
+final _SubscribePortDart _subscribePendingPort = _lib
+    .lookupFunction<_SubscribePortNative, _SubscribePortDart>(
+      'riveThreadedSubscribePendingPort',
+    );
+
+final _UnsubscribePortDart _unsubscribePendingPort = _lib
+    .lookupFunction<_UnsubscribePortNative, _UnsubscribePortDart>(
+      'riveThreadedUnsubscribePendingPort',
+    );
+
+final _InitApiDLDart _initDartApiDL = _lib
+    .lookupFunction<_InitApiDLNative, _InitApiDLDart>(
+      'riveThreadedInitDartApiDL',
+    );
+
+/// One-shot Dart Native API DL initialization. The first reference forces
+/// the field initializer to run; `Dart_InitializeApiDL` returns 0 on
+/// success, -1 on version mismatch.
+final bool _dartApiDLInitialized = (() {
+  return _initDartApiDL(NativeApi.initializeApiDLData) == 0;
+})();
 
 // ---------------------------------------------------------------------------
 // Reported event from the state machine
@@ -662,6 +696,30 @@ class RiveThreadedBindings {
     );
 
     return ThreadedFrame(properties: properties, events: events);
+  }
+
+  // --- Push-not-poll ---
+
+  /// Register [port] so the worker thread posts `1` after each bg cycle that
+  /// produced output. Coalesced: at most one outstanding notification per
+  /// binding. The notification is cleared by the next [acquireFrame] call.
+  ///
+  /// Idempotent on resubscribe — the latest port wins and the pending gate
+  /// resets so the new port gets a fresh notification on the next produce.
+  /// No-op if the binding was already disposed.
+  void subscribePendingPort(SendPort port) {
+    if (_ptr == null) return;
+    assert(_dartApiDLInitialized,
+        'riveThreadedInitDartApiDL returned -1 (Dart API version mismatch)');
+    _subscribePendingPort(_ptr!, port.nativePort);
+  }
+
+  /// Stop posting to the previously-registered port. Safe to call multiple
+  /// times. A post already in flight may still be delivered to the
+  /// (now-closed) ReceivePort, which silently drops it.
+  void unsubscribePendingPort() {
+    if (_ptr == null) return;
+    _unsubscribePendingPort(_ptr!);
   }
 
   // --- Pointer events ---
