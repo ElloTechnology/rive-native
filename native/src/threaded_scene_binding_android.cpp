@@ -316,18 +316,13 @@ public:
 
     rive::ThreadedScene* scene() { return m_scene.get(); }
 
-    // True if EITHER the Android binding marked a fatal EGL/GL failure (via
-    // a false return from clear/makeRenderer/flush) OR the underlying
-    // ThreadedScene caught an exception thrown out of the render callback.
-    // Both indicate the bg worker is permanently stopped; either should
-    // trip the Dart-side sync remount.
+    // True if the Android binding marked a fatal EGL/GL failure (via
+    // a false return from clear/makeRenderer/flush). The bg worker is
+    // permanently stopped once this trips; the Dart-side observer reads
+    // it via riveThreadedHasFatalError and remounts in sync mode.
     bool hasFatalError() const
     {
-        if (m_fatalError.load(std::memory_order_acquire))
-            return true;
-        if (m_scene && m_scene->hasFatalError())
-            return true;
-        return false;
+        return m_fatalError.load(std::memory_order_acquire);
     }
 
     void setPaused(bool paused)
