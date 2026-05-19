@@ -222,6 +222,32 @@ public:
     {
         LOGD("EGLThreadState getting destroyed! 🧨");
 
+        // Destruction order matters. Members get destructed in reverse
+        // declaration order AFTER this body returns, so `m_renderContext`
+        // (`rive::gpu::RenderContextGLImpl::~RenderContextGLImpl`) would
+        // otherwise run after the `eglDestroyContext` / `eglTerminate`
+        // calls below — calling `glDeleteTextures` (and the rest of Rive's
+        // GL teardown) against a destroyed GL context. The GLES driver
+        // null-dereferences in that path during `__cxa_thread_finalize`,
+        // crashing the bg worker thread with SIGSEGV inside
+        // `__cxa_thread_finalize`.
+        //
+        // Make our pbuffer surface current so the Rive render-context
+        // destructor sees a valid GL context, then tear it down first.
+        // After that the EGL surface/context/display can be safely
+        // destroyed in reverse-creation order.
+        if (m_context != EGL_NO_CONTEXT &&
+            m_display != EGL_NO_DISPLAY &&
+            m_backgroundSurface != EGL_NO_SURFACE)
+        {
+            eglMakeCurrent(m_display,
+                           m_backgroundSurface,
+                           m_backgroundSurface,
+                           m_context);
+            EGL_ERR_CHECK();
+        }
+        m_renderContext.reset();
+
         if (m_context != EGL_NO_CONTEXT)
         {
             eglDestroyContext(m_display, m_context);
