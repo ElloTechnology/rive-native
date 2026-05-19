@@ -709,8 +709,17 @@ class RiveThreadedBindings {
   /// No-op if the binding was already disposed.
   void subscribePendingPort(SendPort port) {
     if (_ptr == null) return;
-    assert(_dartApiDLInitialized,
-        'riveThreadedInitDartApiDL returned -1 (Dart API version mismatch)');
+    // Force the lazy initializer to run in every build mode. assert() is
+    // stripped in profile and release, so a `assert(_dartApiDLInitialized,
+    // ...)` here would compile out and Dart_InitializeApiDL would never be
+    // called — the worker's first Dart_PostInteger_DL would then jump
+    // through a null function pointer and SIGSEGV on Thread-16 inside
+    // ThreadedScene::runOneFrame.
+    if (!_dartApiDLInitialized) {
+      throw StateError(
+        'riveThreadedInitDartApiDL returned -1 (Dart API version mismatch)',
+      );
+    }
     _subscribePendingPort(_ptr!, port.nativePort);
   }
 
