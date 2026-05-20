@@ -58,7 +58,8 @@ public:
         int height,
         float devicePixelRatio,
         rive::Fit fit,
-        rive::Alignment alignment)
+        rive::Alignment alignment,
+        float targetFps)
     {
         if (!renderTexture || !artboard || !stateMachine)
         {
@@ -90,6 +91,18 @@ public:
         // the crash propagates to the UI thread. The first visible frame is
         // delayed by one background-thread tick (~16 ms on 60 Hz devices).
         config.runFirstFrameSync = false;
+        // Self-paced bg loop when targetFps > 0: worker advances + renders
+        // at the configured interval using steady_clock dt, independent of
+        // how often the UI thread calls postElapsedTime. Combined with the
+        // SurfaceProducer.scheduleFrame call in AndroidRenderTexture::
+        // endFrame, this lets the compositor draw at the bg-thread rate
+        // even when Flutter's Ticker is idle (no markNeedsPaint upstream).
+        // targetFps <= 0 keeps the legacy postElapsedTime-driven loop.
+        if (targetFps > 0.0f)
+        {
+            config.targetFrameIntervalUs =
+                static_cast<int>(1'000'000.0f / targetFps);
+        }
         // Push-not-poll Option B: have ThreadedScene write its per-cycle
         // "produced Dart-visible output" flag into a binding-owned atomic
         // before the render callback fires. The callback reads it to gate
@@ -455,7 +468,8 @@ EXPORT void* riveThreadedCreate(
     float devicePixelRatio,
     int fit,
     float alignmentX,
-    float alignmentY)
+    float alignmentY,
+    float targetFps)
 {
     auto* renderTexture =
         static_cast<AndroidRenderTexture*>(androidRenderTexturePtr);
@@ -487,7 +501,8 @@ EXPORT void* riveThreadedCreate(
         height,
         devicePixelRatio,
         static_cast<rive::Fit>(fit),
-        rive::Alignment(alignmentX, alignmentY));
+        rive::Alignment(alignmentX, alignmentY),
+        targetFps);
 
     if (!binding)
     {

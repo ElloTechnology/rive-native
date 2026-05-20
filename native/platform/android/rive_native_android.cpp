@@ -24,16 +24,21 @@
 
 std::recursive_mutex flutterMutex;
 
-// ----- JVM bridge for SurfaceProducer.scheduleFrame() -----
+// ----- JVM bridge for the RiveRenderTexture.scheduleFrame() wrapper -----
 // Set in JNI_OnLoad. Used by AndroidRenderTexture::endFrame to wake Flutter's
-// compositor after a successful eglSwapBuffers — necessary because Impeller's
-// SurfaceProducer-backed Texture pipeline does not always pick up new content
-// without an explicit scheduleFrame() (the Surface's onFrameAvailable signal
-// fires, but Flutter's frame scheduler does not aggressively follow it,
-// leaving idle-state vsync_p95 at 50-140ms on Tier-1 Android while the bg
-// thread keeps producing frames the compositor never composites).
+// compositor after a successful eglSwapBuffers. We can NOT call
+// SurfaceProducer.scheduleFrame() directly from the bg worker — it is
+// annotated @UiThread and throws RuntimeException off the main thread. The
+// Kotlin RiveRenderTexture.scheduleFrame() method posts a Runnable to the
+// main-Looper Handler that invokes producer.scheduleFrame on the UI thread,
+// with a coalescing flag so a 60 Hz bg worker only enqueues one pending
+// post at a time.
+//
+// Without this wake the Flutter compositor stays idle even though the
+// BufferQueue holds a new frame, leaving `vsync_p95` at 50-140ms on Tier-1
+// Android.
 static JavaVM* g_javaVM = nullptr;
-static jclass g_surfaceProducerClass = nullptr;
+static jclass g_riveRenderTextureClass = nullptr;
 static jmethodID g_scheduleFrameMid = nullptr;
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/)
@@ -44,33 +49,29 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/)
     {
         return JNI_VERSION_1_6;
     }
-    // SurfaceProducer is an interface; method lookup is via the interface
-    // class, dispatched at call time to the concrete implementation.
     jclass localCls =
-        env->FindClass("io/flutter/view/TextureRegistry$SurfaceProducer");
+        env->FindClass("app/rive/rive_native/RiveRenderTexture");
     if (localCls != nullptr)
     {
-        g_surfaceProducerClass =
+        g_riveRenderTextureClass =
             reinterpret_cast<jclass>(env->NewGlobalRef(localCls));
         env->DeleteLocalRef(localCls);
         g_scheduleFrameMid =
-            env->GetMethodID(g_surfaceProducerClass, "scheduleFrame", "()V");
+            env->GetMethodID(g_riveRenderTextureClass,
+                             "scheduleFrame",
+                             "()V");
         if (g_scheduleFrameMid == nullptr)
         {
-            // Older Flutter (pre-3.27) did not expose scheduleFrame on
-            // SurfaceProducer; gracefully degrade by leaving mid null.
-            // ExceptionClear so any pending NoSuchMethodError does not throw
-            // when the JNI_OnLoad path returns.
             env->ExceptionClear();
-            LOGW("SurfaceProducer.scheduleFrame() not found — bg-thread "
+            LOGW("RiveRenderTexture.scheduleFrame() not found — bg-thread "
                  "compositor wake will be unavailable.");
         }
     }
     else
     {
         env->ExceptionClear();
-        LOGW("TextureRegistry$SurfaceProducer class not found — bg-thread "
-             "compositor wake will be unavailable.");
+        LOGW("RiveRenderTexture class not found — bg-thread compositor wake "
+             "will be unavailable.");
     }
     return JNI_VERSION_1_6;
 }
