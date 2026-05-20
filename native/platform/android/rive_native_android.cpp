@@ -24,6 +24,73 @@
 
 std::recursive_mutex flutterMutex;
 
+// ----- JVM bridge for SurfaceProducer.scheduleFrame() -----
+// Set in JNI_OnLoad. Used by AndroidRenderTexture::endFrame to wake Flutter's
+// compositor after a successful eglSwapBuffers — necessary because Impeller's
+// SurfaceProducer-backed Texture pipeline does not always pick up new content
+// without an explicit scheduleFrame() (the Surface's onFrameAvailable signal
+// fires, but Flutter's frame scheduler does not aggressively follow it,
+// leaving idle-state vsync_p95 at 50-140ms on Tier-1 Android while the bg
+// thread keeps producing frames the compositor never composites).
+static JavaVM* g_javaVM = nullptr;
+static jclass g_surfaceProducerClass = nullptr;
+static jmethodID g_scheduleFrameMid = nullptr;
+
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/)
+{
+    g_javaVM = vm;
+    JNIEnv* env = nullptr;
+    if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK)
+    {
+        return JNI_VERSION_1_6;
+    }
+    // SurfaceProducer is an interface; method lookup is via the interface
+    // class, dispatched at call time to the concrete implementation.
+    jclass localCls =
+        env->FindClass("io/flutter/view/TextureRegistry$SurfaceProducer");
+    if (localCls != nullptr)
+    {
+        g_surfaceProducerClass =
+            reinterpret_cast<jclass>(env->NewGlobalRef(localCls));
+        env->DeleteLocalRef(localCls);
+        g_scheduleFrameMid =
+            env->GetMethodID(g_surfaceProducerClass, "scheduleFrame", "()V");
+        if (g_scheduleFrameMid == nullptr)
+        {
+            // Older Flutter (pre-3.27) did not expose scheduleFrame on
+            // SurfaceProducer; gracefully degrade by leaving mid null.
+            // ExceptionClear so any pending NoSuchMethodError does not throw
+            // when the JNI_OnLoad path returns.
+            env->ExceptionClear();
+            LOGW("SurfaceProducer.scheduleFrame() not found — bg-thread "
+                 "compositor wake will be unavailable.");
+        }
+    }
+    else
+    {
+        env->ExceptionClear();
+        LOGW("TextureRegistry$SurfaceProducer class not found — bg-thread "
+             "compositor wake will be unavailable.");
+    }
+    return JNI_VERSION_1_6;
+}
+
+// Per-thread cached JNIEnv* for the Rive bg worker. Attached as a daemon so
+// the thread does not need to detach before exit. Returns nullptr if the JVM
+// pointer is null (JNI_OnLoad never ran — should be impossible in practice).
+static JNIEnv* getBgThreadJniEnv()
+{
+    if (g_javaVM == nullptr) return nullptr;
+    thread_local JNIEnv* env = nullptr;
+    if (env != nullptr) return env;
+    JavaVMAttachArgs args = {JNI_VERSION_1_6, "RiveBgWorker", nullptr};
+    if (g_javaVM->AttachCurrentThreadAsDaemon(&env, &args) != JNI_OK)
+    {
+        env = nullptr;
+    }
+    return env;
+}
+
 #define EGL_ERR_CHECK() _check_egl_error(__FILE__, __LINE__)
 
 void _check_egl_error(const char* file, int line)
@@ -483,10 +550,47 @@ public:
         threadState->swapBuffers();
 
         plsGL->unbindGLInternalResources();
+
+        // Wake Flutter's compositor. eglSwapBuffers alone is insufficient on
+        // some Impeller GLES builds — the SurfaceProducer's underlying
+        // BufferQueue signals the engine, but the engine doesn't always
+        // follow up with a frame request without an explicit scheduleFrame.
+        // Calling it from the bg thread is safe; SurfaceProducer.scheduleFrame
+        // posts to the Flutter platform thread internally.
+        if (m_surfaceProducer != nullptr && g_scheduleFrameMid != nullptr)
+        {
+            if (JNIEnv* env = getBgThreadJniEnv())
+            {
+                env->CallVoidMethod(m_surfaceProducer, g_scheduleFrameMid);
+                if (env->ExceptionCheck())
+                {
+                    env->ExceptionDescribe();
+                    env->ExceptionClear();
+                }
+            }
+        }
+
         return true;
     }
 
     void scheduleDestruction() { m_scheduledDestruction = true; }
+
+    // Stores a Java global ref to the SurfaceProducer driving this texture.
+    // Called once from the JNI createRiveRenderer entry point. The endFrame
+    // callback invokes SurfaceProducer.scheduleFrame() through this ref to
+    // wake Flutter's compositor after each successful swap.
+    void setSurfaceProducer(JNIEnv* env, jobject producer)
+    {
+        if (m_surfaceProducer != nullptr)
+        {
+            env->DeleteGlobalRef(m_surfaceProducer);
+            m_surfaceProducer = nullptr;
+        }
+        if (producer != nullptr)
+        {
+            m_surfaceProducer = env->NewGlobalRef(producer);
+        }
+    }
 
 private:
     ANativeWindow* m_surfaceWindow;
@@ -498,10 +602,24 @@ private:
     std::unique_ptr<rive::RiveRenderer> m_plsRenderer;
     bool m_scheduledDestruction = false;
 
+    // Java global ref to the SurfaceProducer this texture writes to.
+    // Allocated in setSurfaceProducer, released in releaseSurfaceProducer.
+    // Read from endFrame to invoke SurfaceProducer.scheduleFrame().
+    jobject m_surfaceProducer = nullptr;
+
 public:
     static thread_local std::unique_ptr<EGLThreadState> threadState;
 
     rive::Renderer* renderer() { return m_plsRenderer.get(); }
+
+    void releaseSurfaceProducer(JNIEnv* env)
+    {
+        if (m_surfaceProducer != nullptr && env != nullptr)
+        {
+            env->DeleteGlobalRef(m_surfaceProducer);
+        }
+        m_surfaceProducer = nullptr;
+    }
 };
 
 thread_local std::unique_ptr<EGLThreadState> AndroidRenderTexture::threadState;
@@ -544,12 +662,38 @@ EXPORT void Java_app_rive_rive_1native_RiveNativePluginKt_destroyRiveRenderer(
     {
         AndroidRenderTexture* renderTexture =
             reinterpret_cast<AndroidRenderTexture*>(renderer);
+        // Free the SurfaceProducer global ref while we have a valid JNIEnv*;
+        // the destructor doesn't get one and can't clean it up itself.
+        renderTexture->releaseSurfaceProducer(env);
         delete renderTexture;
     }
     else
     {
         LOGW("JNI: Rive destroyRiveRenderer called with null pointer");
     }
+}
+
+// JNI entry point so the Kotlin RiveRenderTexture can hand its
+// TextureRegistry.SurfaceProducer to the bg-thread render path. After the
+// renderer is created, Kotlin calls this with the same SurfaceProducer that
+// owns the Surface; subsequent endFrame calls invoke SurfaceProducer
+// .scheduleFrame() on it. Passing null clears any previously-set producer.
+EXPORT void
+Java_app_rive_rive_1native_RiveNativePluginKt_setRiveRendererSurfaceProducer(
+    JNIEnv* env,
+    jclass clazz,
+    jlong renderer,
+    jobject surfaceProducer)
+{
+    std::unique_lock<std::recursive_mutex> lock(flutterMutex);
+    if (renderer == 0)
+    {
+        LOGW("JNI: setRiveRendererSurfaceProducer called with null renderer");
+        return;
+    }
+    AndroidRenderTexture* renderTexture =
+        reinterpret_cast<AndroidRenderTexture*>(renderer);
+    renderTexture->setSurfaceProducer(env, surfaceProducer);
 }
 
 EXPORT void
