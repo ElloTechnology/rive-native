@@ -23,6 +23,11 @@ typedef _CreateNative =
       Int32 fit,
       Float alignmentX,
       Float alignmentY,
+      // Target FPS for the bg worker's self-paced render loop. 0 = legacy
+      // postElapsedTime-driven mode (worker waits up to 100 ms on the wake
+      // CV and uses externally-posted dt). > 0 = worker self-paces at this
+      // rate using steady_clock dt, decoupled from UI ticker rate.
+      Float targetFps,
     );
 typedef _CreateDart =
     Pointer<Void> Function(
@@ -36,6 +41,7 @@ typedef _CreateDart =
       int fit,
       double alignmentX,
       double alignmentY,
+      double targetFps,
     );
 
 typedef _DestroyNative = Void Function(Pointer<Void> binding);
@@ -399,6 +405,11 @@ class RiveThreadedBindings {
     int fit = 1, // Fit.contain
     double alignmentX = 0.0,
     double alignmentY = 0.0,
+    // 0 = legacy: bg worker waits on postElapsedTime from the UI ticker.
+    // > 0 = bg worker self-paces at this rate using steady_clock dt, so the
+    // render-success SurfaceProducer.scheduleFrame wake can pump the
+    // compositor at the configured FPS even when the UI ticker is idle.
+    double targetFps = 0.0,
   }) {
     final ptr = _create(
       metalTextureRenderer,
@@ -411,6 +422,7 @@ class RiveThreadedBindings {
       fit,
       alignmentX,
       alignmentY,
+      targetFps,
     );
     if (ptr == nullptr || ptr.address == 0) return null;
     return RiveThreadedBindings._(ptr);

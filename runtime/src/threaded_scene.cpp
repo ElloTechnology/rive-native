@@ -32,12 +32,21 @@ ThreadedScene::ThreadedScene(
     m_logWarning(std::move(config.logWarning)),
     m_externalCycleOutputFlag(config.externalCycleOutputFlag),
     m_width(config.width),
-    m_height(config.height)
+    m_height(config.height),
+    m_targetFrameIntervalUs(config.targetFrameIntervalUs)
 {
     if (config.runFirstFrameSync)
     {
         runOneFrame(0.0f);
     }
+
+    // Anchor the self-paced loop's dt clock right before the thread starts so
+    // the first cycle's dt is the actual elapsed since construction, not a
+    // stale or zero value. Harmless when targetFrameIntervalUs == 0.
+    m_lastTickClockUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
 
     m_running.store(true, std::memory_order_release);
     m_thread = std::thread(&ThreadedScene::threadMain, this);
@@ -292,13 +301,36 @@ void ThreadedScene::acquireFrame(ViewModelSnapshot& outSnapshot,
 
 void ThreadedScene::threadMain()
 {
+    const bool selfPaced = (m_targetFrameIntervalUs > 0);
     while (m_running.load(std::memory_order_acquire))
     {
         {
             std::unique_lock<std::mutex> lock(m_wakeMutex);
+            // Self-paced mode waits at most `m_targetFrameIntervalUs` so the
+            // loop ticks at the configured cadence; legacy mode waits 100 ms
+            // for an external `postElapsedTime` wake. Either mode also wakes
+            // immediately on `m_wakeFlag` (input events) or on stop.
+            const auto waitInterval =
+                selfPaced
+                    ? std::chrono::microseconds(m_targetFrameIntervalUs)
+                    : std::chrono::microseconds(100 * 1000);
+            // Predicate semantics differ between modes:
+            //   legacy   — wake on m_wakeFlag (postElapsedTime/inputs) OR stop.
+            //   selfPaced — wake ONLY on stop. m_wakeFlag from
+            //               postElapsedTime would otherwise short-circuit the
+            //               interval and pin the bg rate to the UI ticker
+            //               rate. Input events (pointer/setVm) are processed
+            //               at the next interval boundary in applyInputEvents
+            //               — at 60 Hz that's ≤ 16 ms input latency, which
+            //               is acceptable for the use case here.
             m_wakeCV.wait_for(lock,
-                              std::chrono::milliseconds(100),
-                              [this] {
+                              waitInterval,
+                              [this, selfPaced] {
+                                  if (selfPaced)
+                                  {
+                                      return !m_running.load(
+                                          std::memory_order_acquire);
+                                  }
                                   return m_wakeFlag ||
                                          !m_running.load(
                                              std::memory_order_acquire);
@@ -311,15 +343,46 @@ void ThreadedScene::threadMain()
             break;
         }
 
-        float dt = m_accumulatedTime.exchange(0.0f, std::memory_order_relaxed);
         bool hadEvents = applyInputEvents();
-
-        if (dt == 0.0f && !hadEvents)
+        float dt;
+        if (selfPaced)
         {
-            continue;
+            // Compute dt from steady_clock so the SM advance is independent
+            // of how often `postElapsedTime` is called (or whether it is at
+            // all — e.g. when ThreadedRiveView's Ticker is muted while the
+            // host route is offscreen). Any `m_accumulatedTime` posted by
+            // the UI side is folded in so paused/resumed transitions don't
+            // double-count: legacy callers can still drive the SM during
+            // self-paced operation without producing duplicate dt.
+            const int64_t nowUs =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count();
+            int64_t deltaUs = nowUs - m_lastTickClockUs;
+            if (deltaUs < 0) deltaUs = 0;
+            // Cap to ~250 ms so a long background pause (app suspended,
+            // device thermal throttle) doesn't fire a giant dt that
+            // teleports the SM forward on resume.
+            constexpr int64_t maxDeltaUs = 250 * 1000;
+            if (deltaUs > maxDeltaUs) deltaUs = maxDeltaUs;
+            m_lastTickClockUs = nowUs;
+            dt = static_cast<float>(deltaUs) / 1e6f +
+                 m_accumulatedTime.exchange(0.0f, std::memory_order_relaxed);
+            // Always advance + render in self-paced mode — even a 0-dt cycle
+            // is useful because it produces a fresh GPU frame the compositor
+            // can pick up after a SurfaceProducer.scheduleFrame.
+            runOneFrame(dt);
         }
-
-        runOneFrame(dt);
+        else
+        {
+            dt = m_accumulatedTime.exchange(0.0f,
+                                            std::memory_order_relaxed);
+            if (dt == 0.0f && !hadEvents)
+            {
+                continue;
+            }
+            runOneFrame(dt);
+        }
     }
 }
 
