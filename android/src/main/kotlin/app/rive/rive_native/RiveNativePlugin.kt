@@ -18,6 +18,15 @@ external fun createRiveRenderer(
 external fun destroyRiveRenderer(renderer: Long)
 external fun markDestroyedRiveRenderer(renderer: Long)
 
+// Hands the SurfaceProducer to native so the bg-thread render path can call
+// `producer.scheduleFrame()` after each successful eglSwapBuffers. Without
+// this wake-up the Flutter compositor stays idle even though the BufferQueue
+// holds a new frame, leaving `vsync_p95` at 50-140 ms on Tier-1 Android.
+external fun setRiveRendererSurfaceProducer(
+    renderer: Long,
+    surfaceProducer: TextureRegistry.SurfaceProducer?,
+)
+
 class RiveNativePlugin :
     FlutterPlugin,
     MethodCallHandler {
@@ -135,6 +144,12 @@ class RiveRenderTexture(
                 width,
                 height,
             )
+        // Hand the SurfaceProducer to native; the bg-thread render path
+        // invokes `producer.scheduleFrame()` on it after each successful
+        // eglSwapBuffers to wake Flutter's compositor.
+        if (riveRenderer != 0L) {
+            setRiveRendererSurfaceProducer(riveRenderer, producer)
+        }
     }
 
     // Called when coming back from backgrounding.
@@ -162,6 +177,9 @@ class RiveRenderTexture(
     fun release() {
         synchronized(this) {
             if (riveRenderer != 0L) {
+                // Drop the native-side SurfaceProducer ref before deleting
+                // the renderer so the global ref is freed via a valid env.
+                setRiveRendererSurfaceProducer(riveRenderer, null)
                 destroyRiveRenderer(riveRenderer)
                 riveRenderer = 0
             }
