@@ -1,5 +1,7 @@
 package app.rive.rive_native
 
+import android.os.Handler
+import android.os.Looper
 import android.view.Surface
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
@@ -18,13 +20,16 @@ external fun createRiveRenderer(
 external fun destroyRiveRenderer(renderer: Long)
 external fun markDestroyedRiveRenderer(renderer: Long)
 
-// Hands the SurfaceProducer to native so the bg-thread render path can call
-// `producer.scheduleFrame()` after each successful eglSwapBuffers. Without
-// this wake-up the Flutter compositor stays idle even though the BufferQueue
-// holds a new frame, leaving `vsync_p95` at 50-140 ms on Tier-1 Android.
+// Hands a RiveRenderTexture-like peer to native so the bg-thread render path
+// can wake Flutter's compositor after each successful eglSwapBuffers. The
+// peer's `scheduleFrame()` posts to the main thread Handler before calling
+// `SurfaceProducer.scheduleFrame()`, which is @UiThread and would throw if
+// called directly from the bg worker. Without this wake-up the Flutter
+// compositor stays idle even though the BufferQueue holds a new frame,
+// leaving `vsync_p95` at 50-140 ms on Tier-1 Android.
 external fun setRiveRendererSurfaceProducer(
     renderer: Long,
-    surfaceProducer: TextureRegistry.SurfaceProducer?,
+    peer: RiveRenderTexture?,
 )
 
 class RiveNativePlugin :
@@ -131,6 +136,42 @@ class RiveRenderTexture(
     private var surface: Surface
     var riveRenderer: Long = 0
 
+    // Handler bound to the main looper so the @UiThread-annotated
+    // SurfaceProducer.scheduleFrame can be invoked from a bg worker via JNI:
+    // we never call producer.scheduleFrame directly from native, only via
+    // `scheduleFrame()` below which posts to this handler.
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Cheap "frame already scheduled" guard so a 60 Hz bg worker doesn't
+    // pile up 60 main-thread runnables per second — at most one pending
+    // post is queued; subsequent bg-thread calls coalesce until the post
+    // actually runs and clears the flag.
+    @Volatile
+    private var schedulePending: Boolean = false
+
+    /**
+     * Called from the C++ background render-success path (via JNI). Posts a
+     * Runnable to the main thread Handler that invokes
+     * SurfaceProducer.scheduleFrame(). Coalesces multiple in-flight requests
+     * to a single pending post via [schedulePending].
+     */
+    @Suppress("unused")
+    fun scheduleFrame() {
+        if (schedulePending) return
+        schedulePending = true
+        mainHandler.post {
+            schedulePending = false
+            try {
+                producer.scheduleFrame()
+            } catch (e: Throwable) {
+                Log.w(
+                    "RiveNativePlugin",
+                    "scheduleFrame failed (producer may be released): $e",
+                )
+            }
+        }
+    }
+
     init {
         producer.setSize(width, height)
         producer.setCallback(
@@ -144,11 +185,13 @@ class RiveRenderTexture(
                 width,
                 height,
             )
-        // Hand the SurfaceProducer to native; the bg-thread render path
-        // invokes `producer.scheduleFrame()` on it after each successful
-        // eglSwapBuffers to wake Flutter's compositor.
+        // Hand this peer to native so the bg-thread render path can call
+        // `RiveRenderTexture.scheduleFrame()` after each successful
+        // eglSwapBuffers — that wrapper posts to the main thread Handler
+        // before invoking `SurfaceProducer.scheduleFrame()` (which is
+        // @UiThread and would throw otherwise).
         if (riveRenderer != 0L) {
-            setRiveRendererSurfaceProducer(riveRenderer, producer)
+            setRiveRendererSurfaceProducer(riveRenderer, this)
         }
     }
 
