@@ -1,5 +1,7 @@
 #include "rive_native/rive_binding.hpp"
 #include "rive_native/external.hpp"
+#include <stdio.h>
+#include <chrono>
 #include "rive/advance_flags.hpp"
 #include "rive/artboard.hpp"
 #include "rive/transform_component.hpp"
@@ -34,6 +36,7 @@
 #include "rive/constraints/constraint.hpp"
 #include "rive/bones/root_bone.hpp"
 #include "rive/nested_artboard.hpp"
+#include "rive/animation/nested_state_machine.hpp"
 #include "rive/animation/state_machine_bool.hpp"
 #include "rive/animation/state_machine_number.hpp"
 #include "rive/animation/state_machine_trigger.hpp"
@@ -49,6 +52,7 @@
 #include "rive/text/raw_text.hpp"
 #include "rive/text/raw_text_input.hpp"
 #include "rive/open_url_event.hpp"
+#include "rive/audio_event.hpp"
 #include "rive/custom_property.hpp"
 #include "rive/custom_property_boolean.hpp"
 #include "rive/custom_property_number.hpp"
@@ -60,6 +64,27 @@
 #ifdef WITH_RIVE_SCRIPTING
 #include "rive/lua/scripting_vm.hpp"
 #endif
+#ifdef RIVE_MICROPROFILE
+#include "rive/profiler/rive_profile.hpp"
+#include "rive/core/vector_binary_writer.hpp"
+
+static std::vector<uint8_t> g_profileBuffer;
+
+// Event buffer for state transition records (written by RiveProfile callback,
+// merged into g_profileBuffer during flush).
+static std::mutex g_eventBufferMutex;
+static std::vector<uint8_t> g_eventBuffer;
+
+static void writeUint64(rive::VectorBinaryWriter& writer, uint64_t value)
+{
+    writer.write(reinterpret_cast<const uint8_t*>(&value), sizeof(value));
+}
+static void writeInt64(rive::VectorBinaryWriter& writer, int64_t value)
+{
+    writer.write(reinterpret_cast<const uint8_t*>(&value), sizeof(value));
+}
+#endif
+#include <map>
 #include <memory>
 #include "rive/focus_data.hpp"
 #include "rive/input/focusable.hpp"
@@ -67,6 +92,8 @@
 #include "rive/math/aabb.hpp"
 #include "rive/semantic/semantic_manager.hpp"
 #include "rive/semantic/semantic_snapshot.hpp"
+#include "rive/file.hpp"
+#include <limits>
 #include <mutex>
 #include <unordered_map>
 
@@ -850,7 +877,7 @@ EXPORT WrappedArtboard* riveFileArtboardDefault(File* file, bool frameOrigin)
         return nullptr;
     }
 
-    auto artboard = file->artboard(0)->instance();
+    auto artboard = file->artboardDefault();
     if (!artboard)
     {
         return nullptr;
@@ -867,17 +894,12 @@ EXPORT WrappedArtboard* riveFileArtboardNamed(File* file,
     {
         return nullptr;
     }
-    Artboard* artboard = file->artboard(name);
-    if (artboard == nullptr)
+    auto artboardInstance = file->artboardNamed(name);
+    if (artboardInstance == nullptr)
     {
         return nullptr;
     }
 
-    auto artboardInstance = artboard->instance();
-    if (!artboardInstance)
-    {
-        return nullptr;
-    }
     AdvanceFlags advancingFlags;
     advancingFlags |= AdvanceFlags::AdvanceNested;
     artboardInstance->frameOrigin(frameOrigin);
@@ -920,13 +942,7 @@ EXPORT WrappedArtboard* riveFileArtboardByIndex(File* file,
         return nullptr;
     }
 
-    Artboard* artboard = file->artboard(index);
-    if (artboard == nullptr)
-    {
-        return nullptr;
-    }
-
-    auto artboardInstance = artboard->instance();
+    auto artboardInstance = file->artboardAt(index);
     if (!artboardInstance)
     {
         return nullptr;
@@ -2287,6 +2303,49 @@ EXPORT void setViewModelInstanceAssetValue(
     viewModelInstanceAsset->propertyValue(value);
 }
 
+uint32_t assetImageResolveRuntimeIndex(File* file,
+                                       ViewModelInstanceAssetImage* vmi)
+{
+    if (file == nullptr || vmi == nullptr)
+    {
+        return std::numeric_limits<uint32_t>::max();
+    }
+    RenderImage* ri = vmi->asset()->renderImage();
+    if (ri == nullptr)
+    {
+        return std::numeric_limits<uint32_t>::max();
+    }
+    auto span = file->assets();
+    for (size_t i = 0; i < span.size(); ++i)
+    {
+        FileAsset* fa = span[i].get();
+        if (fa != nullptr && fa->is<ImageAsset>())
+        {
+            auto faImg = fa->as<ImageAsset>();
+            auto faRi = faImg->renderImage();
+            if (faRi == ri)
+            {
+                return static_cast<uint32_t>(i);
+            }
+        }
+    }
+    return std::numeric_limits<uint32_t>::max();
+}
+
+EXPORT uint32_t viewModelInstanceAssetImageResolveRuntimeIndex(
+    File* file,
+    ViewModelInstanceValue* viewModelInstanceValue)
+{
+    if (file == nullptr || viewModelInstanceValue == nullptr ||
+        !viewModelInstanceValue->is<ViewModelInstanceAssetImage>())
+    {
+        return std::numeric_limits<uint32_t>::max();
+    }
+    return assetImageResolveRuntimeIndex(
+        file,
+        viewModelInstanceValue->as<ViewModelInstanceAssetImage>());
+}
+
 EXPORT void setViewModelInstanceBooleanValue(
     ViewModelInstanceValue* viewModelInstanceValue,
     bool value)
@@ -2711,6 +2770,26 @@ EXPORT void artboardDraw(WrappedArtboard* wrappedArtboard, Renderer* renderer)
     }
     wrappedArtboard->artboard()->draw(renderer);
 }
+
+EXPORT void artboardDrawCanvases(WrappedArtboard* wrappedArtboard)
+{
+    if (wrappedArtboard == nullptr)
+    {
+        return;
+    }
+    wrappedArtboard->artboard()->drawCanvases();
+}
+
+#ifdef WITH_RIVE_SCRIPTING
+EXPORT void* artboardGetDrawCanvasLuauState(WrappedArtboard* wrappedArtboard)
+{
+    if (wrappedArtboard == nullptr)
+    {
+        return nullptr;
+    }
+    return wrappedArtboard->artboard()->findDrawCanvasLuauState();
+}
+#endif
 
 EXPORT void artboardDrawInternal(WrappedArtboard* wrappedArtboard,
                                  Renderer* renderer)
@@ -3886,6 +3965,131 @@ EXPORT bool stateMachineInstanceAdvance(WrappedStateMachine* wrappedMachine,
     return wrappedMachine->stateMachine()->advance(elapsedSeconds, newFrame);
 }
 
+// ---------------------------------------------------------------------------
+// State-transition record flush: serialize RiveProfile's collected records
+// into g_eventBuffer as 0x04 (string table delta) + 0x03 records (grouped by
+// artboard+SM, id-based). Callback is set in profilerStart().
+// ---------------------------------------------------------------------------
+#ifdef RIVE_MICROPROFILE
+static size_t g_lastSentStringTableSize = 0;
+
+static void flushTransitionRecordsToEventBuffer(
+    const std::vector<rive::TransitionRecord>& records)
+{
+    if (records.empty())
+    {
+        return;
+    }
+    const std::vector<std::string>& stringTable =
+        rive::RiveProfile::instance().getStringTable();
+    std::lock_guard<std::mutex> lock(g_eventBufferMutex);
+    rive::VectorBinaryWriter ew(&g_eventBuffer);
+
+    // Emit 0x04 string table with new entries only
+    if (stringTable.size() > g_lastSentStringTableSize)
+    {
+        const size_t count = stringTable.size();
+        ew.write(static_cast<uint8_t>(0x04));
+        std::vector<uint8_t> stPayload;
+        rive::VectorBinaryWriter stw(&stPayload);
+        stw.writeVarUint(static_cast<uint32_t>(count));
+        for (size_t i = 0; i < stringTable.size(); i++)
+        {
+            stw.write(stringTable[i]);
+        }
+        ew.writeVarUint(static_cast<uint32_t>(stPayload.size()));
+        ew.write(stPayload.data(), stPayload.size());
+        g_lastSentStringTableSize = stringTable.size();
+    }
+
+    // Group by (artboardId, smId)
+    std::map<std::pair<uint32_t, uint32_t>, std::vector<size_t>> groups;
+    for (size_t i = 0; i < records.size(); ++i)
+    {
+        const auto& rec = records[i];
+        groups[{rec.artboardId, rec.smId}].push_back(i);
+    }
+    for (const auto& kv : groups)
+    {
+        const auto& indices = kv.second;
+        std::vector<uint8_t> payload;
+        rive::VectorBinaryWriter pw(&payload);
+        writeInt64(pw, static_cast<int64_t>(records[indices[0]].tick));
+        pw.writeVarUint(static_cast<uint32_t>(indices.size()));
+        for (size_t idx : indices)
+        {
+            const auto& rec = records[idx];
+            std::vector<uint8_t> recPayload;
+            rive::VectorBinaryWriter rpw(&recPayload);
+            rpw.writeVarUint(rec.artboardId);
+            rpw.writeVarUint(rec.smId);
+            rpw.writeVarUint(rec.layerId);
+            rpw.writeVarUint(rec.fromStateId);
+            rpw.writeVarUint(rec.toStateId);
+            // Path: segment count, then per segment [segmentLength, type,
+            // nameId, optional index]
+            rpw.writeVarUint(static_cast<uint32_t>(rec.path.size()));
+            for (const auto& seg : rec.path)
+            {
+                std::vector<uint8_t> segPayload;
+                rive::VectorBinaryWriter spw(&segPayload);
+                spw.write(static_cast<uint8_t>(seg.type));
+                spw.writeVarUint(seg.nameId);
+                if (seg.type == 1)
+                {
+                    // Encode index: 0 = -1, otherwise index+1
+                    spw.writeVarUint(
+                        seg.index < 0 ? 0u
+                                      : static_cast<uint32_t>(seg.index + 1));
+                }
+                rpw.writeVarUint(static_cast<uint32_t>(segPayload.size()));
+                rpw.write(segPayload.data(), segPayload.size());
+            }
+            pw.writeVarUint(static_cast<uint32_t>(recPayload.size()));
+            pw.write(recPayload.data(), recPayload.size());
+        }
+        ew.write(static_cast<uint8_t>(0x03));
+        ew.writeVarUint(static_cast<uint32_t>(payload.size()));
+        ew.write(payload.data(), payload.size());
+    }
+}
+
+static void flushListenerPerformChangeRecordsToEventBuffer(
+    const std::vector<rive::ListenerPerformChangeRecord>& records)
+{
+    if (records.empty())
+    {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_eventBufferMutex);
+    rive::VectorBinaryWriter ew(&g_eventBuffer);
+
+    // 0x04 string table is already emitted by
+    // flushTransitionRecordsToEventBuffer when needed; we use the same table.
+    // Emit 0x05 listener perform change batch (length+content per entry).
+    std::vector<uint8_t> payload;
+    rive::VectorBinaryWriter pw(&payload);
+    writeInt64(pw, static_cast<int64_t>(records[0].tick));
+    pw.writeVarUint(static_cast<uint32_t>(records.size()));
+    for (const auto& rec : records)
+    {
+        std::vector<uint8_t> recPayload;
+        rive::VectorBinaryWriter rpw(&recPayload);
+        rpw.writeVarUint(rec.artboardId);
+        rpw.writeVarUint(rec.smId);
+        rpw.writeVarUint(rec.listenerNameId);
+        rpw.writeVarUint(rec.listenerType);
+        rpw.writeVarUint(rec.hitEvent);
+        rpw.writeVarUint(rec.pointerId);
+        pw.writeVarUint(static_cast<uint32_t>(recPayload.size()));
+        pw.write(recPayload.data(), recPayload.size());
+    }
+    ew.write(static_cast<uint8_t>(0x05));
+    ew.writeVarUint(static_cast<uint32_t>(payload.size()));
+    ew.write(payload.data(), payload.size());
+}
+#endif
+
 EXPORT bool stateMachineInstanceAdvanceAndApply(
     WrappedStateMachine* wrappedMachine,
     float elapsedSeconds)
@@ -3894,7 +4098,16 @@ EXPORT bool stateMachineInstanceAdvanceAndApply(
     {
         return false;
     }
-    return wrappedMachine->stateMachine()->advanceAndApply(elapsedSeconds);
+    auto result =
+        wrappedMachine->stateMachine()->advanceAndApply(elapsedSeconds);
+#ifdef RIVE_MICROPROFILE
+    if (rive::RiveProfile::instance().isActive())
+    {
+        rive::RiveProfile::instance().flushTransitionRecords();
+        rive::RiveProfile::instance().flushListenerPerformChangeRecords();
+    }
+#endif
+    return result;
 }
 
 EXPORT SizeType
@@ -4213,6 +4426,46 @@ EXPORT const char* getOpenUrlEventUrl(WrappedEvent* wrappedEvent)
         return openUrlEvent->url().c_str();
     }
     return nullptr;
+}
+
+EXPORT uint32_t getAudioEventAssetId(WrappedEvent* wrappedEvent)
+{
+    if (wrappedEvent == nullptr || wrappedEvent->event() == nullptr ||
+        !wrappedEvent->event()->is<rive::AudioEvent>())
+    {
+        return 0;
+    }
+    return wrappedEvent->event()->as<rive::AudioEvent>()->assetId();
+}
+
+EXPORT const char* getAudioEventAssetName(WrappedEvent* wrappedEvent)
+{
+    if (wrappedEvent == nullptr || wrappedEvent->event() == nullptr ||
+        !wrappedEvent->event()->is<rive::AudioEvent>())
+    {
+        return nullptr;
+    }
+    auto asset = wrappedEvent->event()->as<rive::AudioEvent>()->asset();
+    if (asset == nullptr)
+    {
+        return nullptr;
+    }
+    return asset->name().c_str();
+}
+
+EXPORT float getAudioEventVolume(WrappedEvent* wrappedEvent)
+{
+    if (wrappedEvent == nullptr || wrappedEvent->event() == nullptr ||
+        !wrappedEvent->event()->is<rive::AudioEvent>())
+    {
+        return 0.0f;
+    }
+    auto asset = wrappedEvent->event()->as<rive::AudioEvent>()->asset();
+    if (asset == nullptr || !asset->is<rive::AudioAsset>())
+    {
+        return 0.0f;
+    }
+    return asset->as<rive::AudioAsset>()->volume();
 }
 
 EXPORT std::size_t getEventCustomPropertyCount(WrappedEvent* wrappedEvent)
@@ -5371,6 +5624,13 @@ EXPORT void stateMachineInstanceBatchAdvance(WrappedStateMachine** smi,
     for (int i = 0; i < count; i++)
     {
         smi[i]->stateMachine()->advanceAndApply(elapsedSeconds);
+#ifdef RIVE_MICROPROFILE
+        if (rive::RiveProfile::instance().isActive())
+        {
+            rive::RiveProfile::instance().flushTransitionRecords();
+            rive::RiveProfile::instance().flushListenerPerformChangeRecords();
+        }
+#endif
     }
 #endif
 }
@@ -5399,6 +5659,13 @@ EXPORT void stateMachineInstanceBatchAdvanceAndRender(WrappedStateMachine** smi,
     {
         smi[i]->stateMachine()->advanceAndApply(elapsedSeconds);
         WrappedArtboard* wrappedArtboard = smi[i]->wrappedArtboard();
+#ifdef RIVE_MICROPROFILE
+        if (rive::RiveProfile::instance().isActive())
+        {
+            rive::RiveProfile::instance().flushTransitionRecords();
+            rive::RiveProfile::instance().flushListenerPerformChangeRecords();
+        }
+#endif
         renderer->save();
         renderer->transform(wrappedArtboard->renderTransform);
         wrappedArtboard->artboard()->draw(renderer);
@@ -6030,230 +6297,66 @@ EXPORT bool rawTextInputCursorPosition(RawTextInput* rawTextInput, float* out)
 }
 
 // ============================================================================
-// Profiler FFI bindings
+// Profiler FFI bindings (RiveProfile abstracts MicroProfile)
 // ============================================================================
 
 #ifdef RIVE_MICROPROFILE
-#include "rive/profiler/microprofile_emscripten.h"
-#include "microprofile.h"
-#include "rive/core/vector_binary_writer.hpp"
 
-static std::atomic<bool> g_profilingActive{false};
-static std::vector<uint8_t> g_profileBuffer;
-static bool g_headerWritten = false;
-static uint64_t g_lastFlushedFrameIndex = 0;
-
-// Helper to write uint64_t as raw bytes (BinaryWriter lacks uint64_t overload)
-static void writeUint64(rive::VectorBinaryWriter& writer, uint64_t value)
+static void flushProfileAndMergeTransitionBuffer()
 {
-    writer.write(reinterpret_cast<const uint8_t*>(&value), sizeof(value));
-}
-
-static void writeInt64(rive::VectorBinaryWriter& writer, int64_t value)
-{
-    writer.write(reinterpret_cast<const uint8_t*>(&value), sizeof(value));
-}
-
-// Write header and timer/group info (called once per session)
-static void writeProfileHeader(rive::VectorBinaryWriter& writer,
-                               MicroProfile* pState)
-{
-    // Header: magic + version
-    writer.write((uint32_t)0x52505246); // "RPRF" magic
-    writer.write((uint32_t)2);          // version 2 = event streaming format
-
-    // Tick frequency for converting ticks to time (written early for streaming)
-    writeInt64(writer, MicroProfileTicksPerSecondCpu());
-
-    // Timer count and info
-    writer.writeVarUint(pState->nTotalTimers);
-    for (uint32_t i = 0; i < pState->nTotalTimers; i++)
+    rive::RiveProfile::instance().flushFrameDataTo(g_profileBuffer);
+    std::lock_guard<std::mutex> lock(g_eventBufferMutex);
+    if (!g_eventBuffer.empty())
     {
-        const auto& info = pState->TimerInfo[i];
-        writer.write(std::string(info.pName));
-        writer.write((uint32_t)info.nGroupIndex);
-        writer.write((uint32_t)info.nColor);
+        g_profileBuffer.insert(g_profileBuffer.end(),
+                               g_eventBuffer.begin(),
+                               g_eventBuffer.end());
+        g_eventBuffer.clear();
     }
-
-    // Group info
-    writer.writeVarUint(pState->nGroupCount);
-    for (uint32_t i = 0; i < pState->nGroupCount; i++)
-    {
-        writer.write(std::string(pState->GroupInfo[i].pName));
-    }
-}
-
-// Serialize events for a single frame
-static void writeFrameEvents(rive::VectorBinaryWriter& writer,
-                             MicroProfile* pState,
-                             uint32_t frameIndex,
-                             uint32_t nextFrameIndex)
-{
-    const MicroProfileFrameState& frame = pState->Frames[frameIndex];
-    const MicroProfileFrameState& nextFrame = pState->Frames[nextFrameIndex];
-
-    // Frame marker (0x01 = frame data follows)
-    writer.write((uint8_t)0x01);
-
-    // Frame timing
-    writeInt64(writer, frame.nFrameStartCpu);
-    writeInt64(writer, nextFrame.nFrameStartCpu);
-
-    // Count events across all threads for this frame
-    uint32_t totalEvents = 0;
-    for (uint32_t threadIdx = 0; threadIdx < MICROPROFILE_MAX_THREADS;
-         threadIdx++)
-    {
-        MicroProfileThreadLog* pLog = pState->Pool[threadIdx];
-        if (!pLog)
-            continue;
-
-        uint32_t logStart = frame.nLogStart[threadIdx];
-        uint32_t logEnd = nextFrame.nLogStart[threadIdx];
-
-        // Handle wrap-around in circular buffer
-        if (logEnd >= logStart)
-        {
-            totalEvents += (logEnd - logStart);
-        }
-        else
-        {
-            totalEvents += (MICROPROFILE_BUFFER_SIZE - logStart) + logEnd;
-        }
-    }
-
-    writer.writeVarUint(totalEvents);
-
-    // Write events from all threads
-    for (uint32_t threadIdx = 0; threadIdx < MICROPROFILE_MAX_THREADS;
-         threadIdx++)
-    {
-        MicroProfileThreadLog* pLog = pState->Pool[threadIdx];
-        if (!pLog)
-            continue;
-
-        uint32_t logStart = frame.nLogStart[threadIdx];
-        uint32_t logEnd = nextFrame.nLogStart[threadIdx];
-
-        for (uint32_t k = logStart; k != logEnd;
-             k = (k + 1) % MICROPROFILE_BUFFER_SIZE)
-        {
-            MicroProfileLogEntry entry = pLog->Log[k];
-
-            // Extract entry type and timer index from log entry
-            uint64_t nType = MicroProfileLogType(entry);
-            uint64_t nTimerIndex = MicroProfileLogTimerIndex(entry);
-            int64_t nTick =
-                MicroProfileLogTickDifference(frame.nFrameStartCpu, entry);
-
-            // Event type: 0=enter, 1=leave, 2=meta (GPU events, etc.)
-            uint8_t eventType = (nType == MP_LOG_ENTER)   ? 0
-                                : (nType == MP_LOG_LEAVE) ? 1
-                                                          : 2;
-
-            writer.write(eventType);
-            writer.writeVarUint((uint32_t)nTimerIndex);
-            writeInt64(writer, nTick); // Relative to frame start
-        }
-    }
-}
-
-// Flush new frames to buffer
-static void profilerFlushInternal()
-{
-    MicroProfile* pState = MicroProfileGet();
-    rive::VectorBinaryWriter writer(&g_profileBuffer);
-
-    // Write header once
-    if (!g_headerWritten)
-    {
-        writeProfileHeader(writer, pState);
-        g_headerWritten = true;
-    }
-
-    // Calculate frame range to serialize
-    // nFramePutIndex is monotonic, nFramePut wraps at
-    // MICROPROFILE_MAX_FRAME_HISTORY
-    uint64_t currentFrameIndex = pState->nFramePutIndex;
-
-    // Don't serialize the very latest frames (GPU delay)
-    const uint32_t GPU_DELAY = MICROPROFILE_GPU_FRAME_DELAY + 1;
-    if (currentFrameIndex <= g_lastFlushedFrameIndex + GPU_DELAY)
-    {
-        return; // No new complete frames
-    }
-
-    uint64_t endFrameIndex = currentFrameIndex - GPU_DELAY;
-
-    // Limit to available history
-    uint64_t maxHistory = MICROPROFILE_MAX_FRAME_HISTORY - GPU_DELAY - 2;
-    if (endFrameIndex - g_lastFlushedFrameIndex > maxHistory)
-    {
-        g_lastFlushedFrameIndex = endFrameIndex - maxHistory;
-    }
-
-    // Serialize each new frame
-    for (uint64_t frameIdx = g_lastFlushedFrameIndex; frameIdx < endFrameIndex;
-         frameIdx++)
-    {
-        uint32_t ringIdx = frameIdx % MICROPROFILE_MAX_FRAME_HISTORY;
-        uint32_t nextRingIdx = (frameIdx + 1) % MICROPROFILE_MAX_FRAME_HISTORY;
-
-        writeFrameEvents(writer, pState, ringIdx, nextRingIdx);
-    }
-
-    g_lastFlushedFrameIndex = endFrameIndex;
-}
-
-EXPORT bool profilerStart()
-{
-    if (g_profilingActive.load())
-    {
-        return false;
-    }
-
-    // Clear buffer and reset state for new session
-    g_profileBuffer.clear();
-    g_headerWritten = false;
-
-    MicroProfileSetEnableAllGroups(true);
-    MicroProfileSetForceEnable(true);
-    g_profilingActive.store(true);
-
-    // Record starting frame index
-    MicroProfile* pState = MicroProfileGet();
-    g_lastFlushedFrameIndex = pState->nFramePutIndex;
-
-    return true;
 }
 
 EXPORT bool profilerStop()
 {
-    if (!g_profilingActive.load())
+    if (!rive::RiveProfile::instance().isActive())
     {
         return false;
     }
-    g_profilingActive.store(false);
-    MicroProfileSetForceEnable(false);
-
-    // Final flush to capture remaining frames
-    profilerFlushInternal();
-
-    // Write end marker (append directly to avoid resetting writer position)
+    rive::RiveProfile::instance().stop();
+    flushProfileAndMergeTransitionBuffer();
     g_profileBuffer.push_back(0x00);
-
     return true;
 }
 
-EXPORT bool profilerIsActive() { return g_profilingActive.load(); }
+EXPORT bool profilerStart()
+{
+    if (rive::RiveProfile::instance().isActive())
+    {
+        return false;
+    }
+    g_profileBuffer.clear();
+    {
+        std::lock_guard<std::mutex> lock(g_eventBufferMutex);
+        g_eventBuffer.clear();
+    }
+    g_lastSentStringTableSize = 0;
+    rive::RiveProfile::instance().setFlushCallback(
+        flushTransitionRecordsToEventBuffer);
+    rive::RiveProfile::instance().setListenerPerformChangeFlushCallback(
+        flushListenerPerformChangeRecordsToEventBuffer);
+    rive::RiveProfile::instance().start();
+    return true;
+}
 
-// Get current buffer (auto-flushes pending frames)
+EXPORT bool profilerIsActive()
+{
+    return rive::RiveProfile::instance().isActive();
+}
+
 EXPORT size_t profilerDump()
 {
-    // Flush any pending frames first
-    if (g_profilingActive.load())
+    if (rive::RiveProfile::instance().isActive())
     {
-        profilerFlushInternal();
+        flushProfileAndMergeTransitionBuffer();
     }
     return g_profileBuffer.size();
 }
@@ -6268,14 +6371,7 @@ EXPORT void profilerFreeBuffer()
     g_profileBuffer.shrink_to_fit();
 }
 
-// Mark end of frame for proper frame boundary tracking
-EXPORT void profilerEndFrame()
-{
-    if (g_profilingActive.load())
-    {
-        MicroProfileFlip();
-    }
-}
+EXPORT void profilerEndFrame() { rive::RiveProfile::instance().endFrame(); }
 
 #else // Stubs when RIVE_MICROPROFILE not defined
 
@@ -7414,9 +7510,13 @@ EMSCRIPTEN_BINDINGS(RiveBinding)
     function("profilerStop", &profilerStop);
     function("profilerIsActive", &profilerIsActive);
     function("profilerDump", &profilerDump);
-    function("profilerGetBufferPtr",
-             &profilerGetBufferPtr,
-             allow_raw_pointers());
+    // Return the buffer address as an integer so embind doesn't need to bind
+    // `const uint8_t*` (which triggers UnboundTypeError at call time).
+    function(
+        "profilerGetBufferPtr",
+        +[]() -> uintptr_t {
+            return reinterpret_cast<uintptr_t>(profilerGetBufferPtr());
+        });
     function("profilerGetBufferSize", &profilerGetBufferSize);
     function("profilerFreeBuffer", &profilerFreeBuffer);
     function("profilerEndFrame", &profilerEndFrame);

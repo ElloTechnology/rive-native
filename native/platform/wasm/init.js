@@ -42,12 +42,12 @@ Module["onRuntimeInitialized"] = function () {
         _offscreenGL = makeGLRenderer(offscreenCanvas, enableMSAA);
 
         _offscreenGL._hasPixelLocalStorage = Boolean(
-          _offscreenGL._gl.getExtension("WEBGL_shader_pixel_local_storage")
+          _offscreenGL._gl.getExtension("WEBGL_shader_pixel_local_storage"),
         );
 
         _offscreenGL._maxRTSize = Math.min(
           _offscreenGL._gl.getParameter(_offscreenGL._gl.MAX_RENDERBUFFER_SIZE),
-          _offscreenGL._gl.getParameter(_offscreenGL._gl.MAX_TEXTURE_SIZE)
+          _offscreenGL._gl.getParameter(_offscreenGL._gl.MAX_TEXTURE_SIZE),
         );
 
         // WEBGL_shader_pixel_local_storage works without MSAA.
@@ -55,14 +55,14 @@ Module["onRuntimeInitialized"] = function () {
           !_offscreenGL._hasPixelLocalStorage;
 
         const webglDebugInfo = _offscreenGL._gl.getExtension(
-          "WEBGL_debug_renderer_info"
+          "WEBGL_debug_renderer_info",
         );
         if (webglDebugInfo) {
           const vendor = _offscreenGL._gl.getParameter(
-            webglDebugInfo.UNMASKED_VENDOR_WEBGL
+            webglDebugInfo.UNMASKED_VENDOR_WEBGL,
           );
           const renderer = _offscreenGL._gl.getParameter(
-            webglDebugInfo.UNMASKED_RENDERER_WEBGL
+            webglDebugInfo.UNMASKED_RENDERER_WEBGL,
           );
           if (
             vendor.includes("Google") &&
@@ -84,18 +84,37 @@ Module["onRuntimeInitialized"] = function () {
         _offscreenGL = MakeOffscreenGL(/*enableMSAA =*/ false);
       }
     }
-    return makeGLRenderer(
+    var renderer = makeGLRenderer(
       canvas,
-      /*enableMSAA =*/ _offscreenGL._enableAntialiasCanvas
+      /*enableMSAA =*/ _offscreenGL._enableAntialiasCanvas,
     );
+    if (renderer) {
+      // Extract the renderer-owned ore + PLS render context pointers.
+      // These are created in the WebGL2Renderer constructor in the same
+      // GL context, so they're guaranteed to match this canvas.
+      renderer._oreCtxPtr = Module["_rendererGetOreContext"](renderer["_ptr"]);
+      renderer._renderCtxPtr = Module["_rendererGetGPURenderContext"](
+        renderer["_ptr"],
+      );
+      // Track the most recently created renderer so clearRenderer() can
+      // restore the correct GL context each frame.
+      _activeRenderer = renderer;
+    }
+    return renderer;
   };
 
   const cppClear = Module["clearRenderer"];
   const cppResize = Module["resizeRenderer"];
 
+  // Track the active renderer so we know which GL context to restore after
+  // ore operations that may have changed it.
+  let _activeRenderer = null;
+
+
   Module["clearRenderer"] = function (renderer, color) {
-    // Resize WebGL surface if the canvas size changed.
+    _activeRenderer = renderer;
     GL.makeContextCurrent(renderer._handle);
+
     const canvas = renderer._canvas;
     const w = canvas.clientWidth * window.devicePixelRatio || 1;
     const h = canvas.clientHeight * window.devicePixelRatio || 1;
@@ -260,8 +279,8 @@ Module["onRuntimeInitialized"] = function () {
   };
 
   var riveLuaConsole = Module["riveLuaConsole"];
-  Module["riveLuaConsole"] = function (workspace, workId) {
-    var response = riveLuaConsole(workspace, workId);
+  Module["riveLuaConsole"] = function (state) {
+    var response = riveLuaConsole(state);
     var dataPtr = response[0];
     var size = response[1];
     var data = Module["heapDataView"](dataPtr, size);
@@ -286,6 +305,23 @@ Module["onRuntimeInitialized"] = function () {
     return Module["heapViewU8"](dataPtr, count);
   };
 
+  // initGPUScriptingGL and getGPURenderContextPtr removed — GL context handle,
+  // ore context, and render context are now passed explicitly through
+  // riveVMAdopt via the RenderTexture, eliminating global renderer tracking.
+
+  // riveLuaPushCanvas / riveLuaPushGPUCanvas are now RIVE_FFI_EXPORT'd at their
+  // definition sites, so EMSCRIPTEN_KEEPALIVE exports them as _riveLuaPush*.
+  // The Dart-web layer accesses them without the leading underscore.
+  Module["riveLuaPushCanvas"] = Module["_riveLuaPushCanvas"];
+  Module["riveLuaPushGPUCanvas"] = Module["_riveLuaPushGPUCanvas"];
+  Module["riveLuaContextBeginRenderPass"] =
+    Module["_riveLuaContextBeginRenderPass"];
+
+  // GL context switching and frame management are handled in C++ inside
+  // riveGPUBeginFrameExport / riveGPUEndFrameExport (WASM-only wrappers).
+  Module["riveGPUBeginFrame"] = Module["_riveGPUBeginFrameExport"];
+  Module["riveGPUEndFrame"] = Module["_riveGPUEndFrameExport"];
+
   if (typeof Module["requestSerializedViewModelInstanceWasm"] === "function") {
     var requestSerializedViewModelInstanceWasm =
       Module["requestSerializedViewModelInstanceWasm"];
@@ -293,11 +329,11 @@ Module["onRuntimeInitialized"] = function () {
       Module["freeViewModelInstanceSerializedDataWasm"];
     Module["_requestSerializedViewModelInstance"] = function (
       filePtr,
-      instancePtr
+      instancePtr,
     ) {
       var response = requestSerializedViewModelInstanceWasm(
         filePtr,
-        instancePtr
+        instancePtr,
       );
       if (!response || response.size === 0) {
         return null;

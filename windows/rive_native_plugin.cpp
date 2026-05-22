@@ -302,13 +302,16 @@ void RiveNativePlugin::HandleMethodCall(
             return;
         }
         auto args = std::get_if<flutter::EncodableMap>(method_call.arguments());
-        auto widthItr = args->find(flutter::EncodableValue("width"));
-        int32_t width = 0;
-        if (widthItr != args->end())
+        if (args == nullptr)
         {
-            width = std::get<int32_t>(widthItr->second);
+            result->Error("CreateTexture error",
+                          "No arguments received by the native part of "
+                          "RiveNative.createTexture",
+                          nullptr);
+            return;
         }
-        else
+        auto widthItr = args->find(flutter::EncodableValue("width"));
+        if (widthItr == args->end())
         {
             result->Error("CreateTexture error",
                           "No width received by the native part of "
@@ -316,14 +319,10 @@ void RiveNativePlugin::HandleMethodCall(
                           nullptr);
             return;
         }
+        int64_t width = widthItr->second.LongValue();
 
         auto heightItr = args->find(flutter::EncodableValue("height"));
-        int32_t height = 0;
-        if (heightItr != args->end())
-        {
-            height = std::get<int32_t>(heightItr->second);
-        }
-        else
+        if (heightItr == args->end())
         {
             result->Error("CreateTexture error",
                           "No height received by the native part of "
@@ -331,12 +330,14 @@ void RiveNativePlugin::HandleMethodCall(
                           nullptr);
             return;
         }
+        int64_t height = heightItr->second.LongValue();
 
-        auto renderTexture = new RiveNativeRenderTexture(m_gpu.Get(),
-                                                         m_riveRendererContext,
-                                                         width,
-                                                         height,
-                                                         m_textureRegistrar);
+        auto renderTexture =
+            new RiveNativeRenderTexture(m_gpu.Get(),
+                                        m_riveRendererContext,
+                                        static_cast<uint32_t>(width),
+                                        static_cast<uint32_t>(height),
+                                        m_textureRegistrar);
         m_renderTextures[renderTexture->id()] = renderTexture;
 
         flutter::EncodableMap map;
@@ -361,13 +362,16 @@ void RiveNativePlugin::HandleMethodCall(
     else if (method_call.method_name().compare("removeTexture") == 0)
     {
         auto args = std::get_if<flutter::EncodableMap>(method_call.arguments());
-        auto idItr = args->find(flutter::EncodableValue("id"));
-        int64_t id = 0;
-        if (idItr != args->end())
+        if (args == nullptr)
         {
-            id = std::get<int64_t>(idItr->second);
+            result->Error("removeTexture error",
+                          "no arguments received by the native part of "
+                          "RiveNative.removeTexture",
+                          nullptr);
+            return;
         }
-        else
+        auto idItr = args->find(flutter::EncodableValue("id"));
+        if (idItr == args->end())
         {
             result->Error(
                 "removeTexture error",
@@ -375,6 +379,7 @@ void RiveNativePlugin::HandleMethodCall(
                 nullptr);
             return;
         }
+        int64_t id = idItr->second.LongValue();
 
         auto itr = m_renderTextures.find(id);
         if (itr != m_renderTextures.end())

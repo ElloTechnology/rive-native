@@ -289,6 +289,11 @@ public:
                                                  std::string path,
                                                  size_t size)
         {}
+
+        virtual void onViewModelListCleared(const ViewModelInstanceHandle,
+                                            uint64_t requestId,
+                                            std::string path)
+        {}
     };
 
     class StateMachineListener
@@ -601,6 +606,10 @@ public:
     // will be run per pollCommands.
     void draw(DrawKey, CommandServerDrawCallback);
 
+    // Cancel a pending draw for the given key if it has already been admitted
+    // to the current coalesced draw batch.
+    void cancelDraw(DrawKey);
+
 #ifdef TESTING
     // Sends a commandLoopBreak command to the server. This will cause the
     // processCommands to return even if there are more commands to consume.
@@ -608,7 +617,6 @@ public:
     // return. To continue processing commands, another call to processCommands
     // is required.
     void testing_commandLoopBreak();
-
     FileListener* testing_getFileListener(FileHandle);
     ArtboardListener* testing_getArtboardListener(ArtboardHandle);
     StateMachineListener* testing_getStateMachineListener(StateMachineHandle);
@@ -652,6 +660,10 @@ public:
     void requestViewModelInstanceListSize(ViewModelInstanceHandle,
                                           std::string path,
                                           uint64_t requestId = 0);
+
+    void requestViewModelInstanceListClear(ViewModelInstanceHandle,
+                                           std::string path,
+                                           uint64_t requestId = 0);
 
     void requestStateMachineNames(ArtboardHandle, uint64_t requestId = 0);
     void requestDefaultViewModelInfo(ArtboardHandle,
@@ -830,6 +842,7 @@ private:
         bindViewModelInstance,
         runOnce,
         draw,
+        cancelDraw,
         pointerMove,
         pointerDown,
         pointerUp,
@@ -849,7 +862,8 @@ private:
         listViewModelProperties,
         listViewModelPropertyValue,
         getViewModelInstanceViewModelName,
-        getViewModelListSize
+        getViewModelListSize,
+        clearViewModelList
     };
 
     enum class Message
@@ -866,6 +880,7 @@ private:
         viewModelPropertiesListed,
         viewModelPropertyValueReceived,
         viewModelListSizeReceived,
+        viewModelListCleared,
         fileLoaded,
         fileDeleted,
         artboardInstantiated,

@@ -3,21 +3,33 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:ffi';
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 import 'package:rive_native/scripting_workspace.dart';
 import 'package:rive_native/src/ffi/dynamic_library_helper.dart';
 import 'package:rive_native/src/ffi/rive_ffi.dart';
+import 'package:rive_native/src/ffi/rive_luau_ffi.dart'
+    show initGPUScriptingMetal, initGPUScriptingD3D11, initGPUScriptingGL;
+import 'package:rive_native/src/ffi/rive_renderer_ffi.dart' as rive_renderer;
+import 'package:rive_native/rive_native.dart' show RenderTexture;
+import 'package:rive_native/src/rive.dart' show Factory;
 import 'package:rive_native/utilities.dart';
 
 final DynamicLibrary _nativeLib = DynamicLibraryHelper.nativeLib;
 
-Pointer<Void> Function(Pointer<NativeFunction<Void Function(Uint64)>>)
+Pointer<Void> Function(
+  Pointer<NativeFunction<Void Function(Uint64)>>,
+  bool,
+)
 _makeScriptingWorkspace = _nativeLib
     .lookup<
       NativeFunction<
-        Pointer<Void> Function(Pointer<NativeFunction<Void Function(Uint64)>>)
+        Pointer<Void> Function(
+          Pointer<NativeFunction<Void Function(Uint64)>>,
+          Bool,
+        )
       >
     >('makeScriptingWorkspace')
     .asFunction();
@@ -167,6 +179,20 @@ _compileAndSign = _nativeLib
     >('scriptingWorkspaceCompileAndSign')
     .asFunction();
 
+void Function(Pointer<Void> workspace, Pointer<Void> oreContext)
+    _scriptingWorkspaceSetOreContext = _nativeLib
+        .lookup<NativeFunction<Void Function(Pointer<Void>, Pointer<Void>)>>(
+          'scriptingWorkspaceSetOreContext',
+        )
+        .asFunction();
+
+void Function(Pointer<Void> workspace, Pointer<Void> renderContext)
+    _scriptingWorkspaceSetRenderContext = _nativeLib
+        .lookup<NativeFunction<Void Function(Pointer<Void>, Pointer<Void>)>>(
+          'scriptingWorkspaceSetRenderContext',
+        )
+        .asFunction();
+
 int Function(Pointer<Void> workspace, Pointer<Void> factory) _requestVM =
     _nativeLib
         .lookup<NativeFunction<Uint64 Function(Pointer<Void>, Pointer<Void>)>>(
@@ -252,6 +278,20 @@ _scriptingWorkspaceRequestAutocomplete = _nativeLib
         )
       >
     >('scriptingWorkspaceRequestAutocomplete')
+    .asFunction();
+
+int Function(Pointer<Void>, Pointer<Utf8> scriptName, int line, int column)
+_scriptingWorkspaceRequestAutocompleteWGSL = _nativeLib
+    .lookup<
+      NativeFunction<
+        Uint64 Function(
+          Pointer<Void>,
+          Pointer<Utf8> scriptName,
+          Uint32 line,
+          Uint32 column,
+        )
+      >
+    >('scriptingWorkspaceRequestAutocompleteWGSL')
     .asFunction();
 
 int Function(Pointer<Void>, Pointer<Utf8> scriptName, int line, int column)
@@ -359,7 +399,7 @@ _scriptingWorkspaceResponse = _nativeLib
 class ScriptingWorkspaceFFI extends ScriptingWorkspace {
   late Pointer<Void> _nativeWorkspace;
   NativeCallable<Void Function(Uint64)>? _callable;
-  ScriptingWorkspaceFFI() {
+  ScriptingWorkspaceFFI({bool canvasEnabled = false}) {
     _callable = NativeCallable<Void Function(Uint64)>.listener(
       workReadyCallback,
     );
@@ -368,7 +408,10 @@ class ScriptingWorkspaceFFI extends ScriptingWorkspace {
     _nativeWorkspace = callback == null
         ? nullptr
         : (() {
-            return _makeScriptingWorkspace(callback.nativeFunction);
+            return _makeScriptingWorkspace(
+              callback.nativeFunction,
+              canvasEnabled,
+            );
           })();
   }
 
@@ -389,6 +432,22 @@ class ScriptingWorkspaceFFI extends ScriptingWorkspace {
   ) {
     final scriptNameNative = scriptName.toNativeUtf8(allocator: calloc);
     final workId = _scriptingWorkspaceRequestAutocomplete(
+      _nativeWorkspace,
+      scriptNameNative,
+      position.line,
+      position.column,
+    );
+    calloc.free(scriptNameNative);
+    return registerCompleter(workId);
+  }
+
+  @override
+  Future<AutocompleteResult> autocompleteWGSL(
+    String scriptName,
+    ScriptPosition position,
+  ) {
+    final scriptNameNative = scriptName.toNativeUtf8(allocator: calloc);
+    final workId = _scriptingWorkspaceRequestAutocompleteWGSL(
       _nativeWorkspace,
       scriptNameNative,
       position.line,
@@ -623,6 +682,22 @@ class ScriptingWorkspaceFFI extends ScriptingWorkspace {
   }
 
   @override
+  void setOreContext(int oreContextPointer) {
+    _scriptingWorkspaceSetOreContext(
+      _nativeWorkspace,
+      Pointer<Void>.fromAddress(oreContextPointer),
+    );
+  }
+
+  @override
+  void setRenderContext(int renderContextPointer) {
+    _scriptingWorkspaceSetRenderContext(
+      _nativeWorkspace,
+      Pointer<Void>.fromAddress(renderContextPointer),
+    );
+  }
+
+  @override
   Future<VMResult?> requestVM({int factoryPointer = 0}) {
     final workId = _requestVM(
       _nativeWorkspace,
@@ -722,7 +797,46 @@ class ScriptingWorkspaceFFI extends ScriptingWorkspace {
   ).toDartString();
 }
 
-ScriptingWorkspace makeScriptingWorkspace() => ScriptingWorkspaceFFI();
+ScriptingWorkspace makeScriptingWorkspace({bool canvasEnabled = false}) =>
+    ScriptingWorkspaceFFI(canvasEnabled: canvasEnabled);
+
+/// On native (FFI), the RenderTexture is not needed — GPU context is
+/// process-global. Delegates to the existing platform-specific init.
+void configureGPUFromRenderTextureImpl(
+  ScriptingWorkspace workspace,
+  RenderTexture? renderTexture,
+) {
+  final oreCtxAddress = initGPUScriptingForPlatform();
+  if (oreCtxAddress != 0) {
+    workspace.setOreContext(oreCtxAddress);
+    workspace.setRenderContext(Factory.rive.nativePointerAddress);
+  }
+}
+
+/// Initialises ore::Context for the current platform and returns its pointer
+/// address (0 on failure).  The pointer is process-lifetime; pass it to
+/// [ScriptingWorkspace.setOreContext] on every workspace you create.
+int initGPUScriptingForPlatform() {
+  final rcPtr = Pointer<Void>.fromAddress(Factory.rive.nativePointerAddress);
+  if (rcPtr == nullptr) {
+    return 0;
+  }
+  Pointer<Void> queue = nullptr;
+  try {
+    queue = rive_renderer.getQueue();
+  } catch (_) {
+    // getQueue() is only available on Metal (macOS/iOS).
+  }
+  final Pointer<Void> oreCtx;
+  if (Platform.isMacOS || Platform.isIOS) {
+    oreCtx = initGPUScriptingMetal(rcPtr, queue);
+  } else if (Platform.isWindows) {
+    oreCtx = initGPUScriptingD3D11(rcPtr);
+  } else {
+    oreCtx = initGPUScriptingGL(rcPtr);
+  }
+  return oreCtx.address;
+}
 Uint8List getNativeFontBytes() {
   final bytes = _nativeFontBytes();
   final size = _nativeFontSize();

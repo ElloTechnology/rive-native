@@ -81,6 +81,8 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   flutter
   flutter_wrapper_plugin
   d3d11
+  d3d12
+  d3dcompiler
   dxgi
   optimized "${CMAKE_CURRENT_SOURCE_DIR}/bin/lib/release/rive_native.lib"
   debug "${CMAKE_CURRENT_SOURCE_DIR}/bin/lib/debug/rive_native.lib"

@@ -110,6 +110,10 @@ abstract base class RenderTexturePainter extends RivePainter {
   bool get needsClip => false;
   void paintCanvas(Canvas canvas, Offset offset, Size size) {}
   void textureChanged() {}
+
+  /// Called before the main RenderContext frame opens to run scripted canvas
+  /// draws in their own frame. Override in subclasses that manage an artboard.
+  void prepassCanvases() {}
 }
 
 abstract base class RenderTexture {

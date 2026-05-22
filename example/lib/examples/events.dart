@@ -28,6 +28,10 @@ class _ExampleEventsState extends State<ExampleEvents> {
         // Add your custom logic to open a URL here
         print(
             '\nURL to open: "${event.url}", with target: "${event.target}"\n');
+      case AudioRuntimeEvent():
+        // Add your custom logic to play an audio file here
+        print(
+            '\nAudio to play: "${event.assetName}", with volume: ${event.volume}\n');
     }
   }
 

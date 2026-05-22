@@ -4,6 +4,7 @@
 #include "rive/renderer/gl/render_context_gl_impl.hpp"
 #include "rive/renderer/rive_renderer.hpp"
 #include "rive/renderer/gl/render_target_gl.hpp"
+#include "rive/renderer/ore/ore_context_gl.hpp"
 
 #include <emscripten.h>
 #include <emscripten/bind.h>
@@ -29,6 +30,7 @@ using PLSResourceID = uint64_t;
 using WasmPtr = uint32_t;
 
 static std::atomic<PLSResourceID> s_nextWebGL2BufferID;
+static std::atomic<int> s_nextRendererID{0};
 
 #define EXPORT extern "C" EMSCRIPTEN_KEEPALIVE
 
@@ -306,8 +308,9 @@ private:
         0; // Tells when we are out of sync with the WebGL2BufferData.
 };
 
-// Wraps a tightly coupled RiveRenderer and RenderContext, which are tied to a
-// specific WebGL2 context.
+// Wraps a tightly coupled RiveRenderer, RenderContext, and ore::Context, all
+// bound to a single WebGL2 context. This is the single owner of both the PLS
+// rendering context and the Ore GPU scripting context for a given canvas.
 class WebGL2Renderer : public RiveRenderer
 {
 public:
@@ -315,14 +318,20 @@ public:
                    int width,
                    int height) :
         RiveRenderer(renderContext.get()),
-        m_renderContext(std::move(renderContext))
+        m_renderContext(std::move(renderContext)),
+        m_rendererID(++s_nextRendererID)
     {
+        // Create the ore::Context in the same GL context that the PLS
+        // RenderContext was just created in. This guarantees both share
+        // the same WebGL context for their entire lifetime.
+        m_oreContext = ore::ContextGL::Make();
         resize(width, height);
     }
 
     ~WebGL2Renderer()
     {
         ScopedGLContextMakeCurrent makeCurrent(m_contextGL);
+        m_oreContext.reset();
         m_plsSynchronizedBuffers.clear();
         m_renderTarget.release();
         m_renderContext.release();
@@ -331,6 +340,9 @@ public:
     EMSCRIPTEN_WEBGL_CONTEXT_HANDLE contextGL() const { return m_contextGL; }
 
     PLSResourceID currentFrameID() const { return m_currentFrameID; }
+
+    RenderContext* gpuRenderContext() const { return m_renderContext.get(); }
+    ore::Context* oreContext() const { return m_oreContext.get(); }
 
     RenderContextGLImpl* renderContextGL() const
     {
@@ -393,6 +405,15 @@ public:
                    BlendMode blendMode,
                    float opacity) override
     {
+        // Canvas textures are already RiveRenderImages — draw directly.
+        if (lite_rtti_cast<const RiveRenderImage*>(renderImage) != nullptr)
+        {
+            RiveRenderer::drawImage(renderImage,
+                                    ImageSampler::LinearClamp(),
+                                    blendMode,
+                                    opacity);
+            return;
+        }
         LITE_RTTI_CAST_OR_RETURN(webglRenderImage,
                                  const WebGL2RenderImage*,
                                  renderImage);
@@ -418,6 +439,30 @@ public:
                        BlendMode blendMode,
                        float opacity) override
     {
+        // Canvas textures are already RiveRenderImages — draw directly.
+        if (lite_rtti_cast<const RiveRenderImage*>(renderImage) != nullptr)
+        {
+            int currentGL = emscripten_webgl_get_current_context();
+            if (currentGL != (int)m_contextGL)
+            {
+                fprintf(stderr,
+                        "[drawImageMesh] CONTEXT MISMATCH! RiveRenderImage "
+                        "img=%p rendererGL=%d currentGL=%d\n",
+                        renderImage,
+                        (int)m_contextGL,
+                        currentGL);
+            }
+            RiveRenderer::drawImageMesh(renderImage,
+                                        ImageSampler::LinearClamp(),
+                                        std::move(vertices_f32),
+                                        std::move(uvCoords_f32),
+                                        std::move(indices_u16),
+                                        vertexCount,
+                                        indexCount,
+                                        blendMode,
+                                        opacity);
+            return;
+        }
         LITE_RTTI_CAST_OR_RETURN(webglRenderImage,
                                  const WebGL2RenderImage*,
                                  renderImage);
@@ -473,11 +518,13 @@ private:
         emscripten_webgl_get_current_context();
 
     std::unique_ptr<RenderContext> m_renderContext;
+    std::unique_ptr<ore::Context> m_oreContext;
     rcp<FramebufferRenderTargetGL> m_renderTarget;
 
     std::map<PLSResourceID, PLSSynchronizedBuffer> m_plsSynchronizedBuffers;
 
     PLSResourceID m_currentFrameID = 0;
+    const int m_rendererID;
 };
 
 RenderImage* WebGL2RenderImage::prep(
@@ -588,6 +635,37 @@ WasmPtr makeRenderer(int width, int height)
 }
 
 EXPORT WasmPtr rendererContext() { return (WasmPtr)WebGL2Factory::Instance(); }
+
+// Extract the gpu::RenderContext* from a WebGL2Renderer*.
+EXPORT WasmPtr rendererGetGPURenderContext(WasmPtr rendererPtr)
+{
+    auto* renderer = (WebGL2Renderer*)rendererPtr;
+    if (!renderer)
+        return 0;
+    return (WasmPtr)renderer->gpuRenderContext();
+}
+
+// Extract the ore::Context* from a WebGL2Renderer*.
+// The renderer owns the ore::Context — created in the same GL context.
+EXPORT WasmPtr rendererGetOreContext(WasmPtr rendererPtr)
+{
+    auto* renderer = (WebGL2Renderer*)rendererPtr;
+    if (!renderer)
+        return 0;
+    return (WasmPtr)renderer->oreContext();
+}
+
+// Tell PLS that external code (ore) may have modified GL state.
+// Must be called after any ore GL operations so PLS re-binds its
+// internal textures, buffers, and VAOs on the next flush.
+EXPORT void riveInvalidateGLState(WasmPtr renderContextPtr)
+{
+    auto* ctx = (gpu::RenderContext*)renderContextPtr;
+    if (ctx)
+    {
+        ctx->static_impl_cast<gpu::RenderContextGLImpl>()->invalidateGLState();
+    }
+}
 
 void deleteRenderer(WasmPtr rendererPtr)
 {

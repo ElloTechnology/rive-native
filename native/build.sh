@@ -10,6 +10,7 @@ RIVE_AUDIO=system
 RUNTIME=
 WASM_SINGLE_THREADED=
 CROSS_COMPILE_OS=
+WITH_MICROPROFILE=
 
 unameOut="$(uname -s)"
 case "${unameOut}" in
@@ -103,7 +104,15 @@ for var in "$@"; do
         export CC=/usr/bin/clang
         export CXX=/usr/bin/clang++
     fi
+    if [[ $var = "microprofile" ]]; then
+        WITH_MICROPROFILE=--with_microprofile
+    fi
 done
+
+# Default debug builds to include microprofile support
+if [[ -z $WITH_MICROPROFILE && $CONFIG = "debug" ]]; then
+    WITH_MICROPROFILE=--with_microprofile
+fi
 
 if [[ $OS = "wasm" ]]; then
     NO_LTO=--no-lto
@@ -224,7 +233,7 @@ if [[ $FLUTTER_RUNTIME = "" ]]; then
     RIVE_TOOLS=--with_rive_tools
 fi
 
-RIVE_NATIVE_PREMAKE_COMMANDS="--with_microprofile --with_rive_scripting $RIVE_TOOLS --with_rive_text --with_rive_layout --with_rive_audio=$RIVE_AUDIO $CONFIG --variant=$VARIANT $COMPAT $KIND $FLUTTER_RUNTIME $NO_LTO $ASAN $CROSS_COMPILE_OS"
+RIVE_NATIVE_PREMAKE_COMMANDS="$WITH_MICROPROFILE --with_rive_canvas --with_rive_scripting --with_objc_exceptions $RIVE_TOOLS --with_rive_text --with_rive_layout --with_rive_audio=$RIVE_AUDIO $CONFIG --variant=$VARIANT $COMPAT $KIND $FLUTTER_RUNTIME $NO_LTO $ASAN $CROSS_COMPILE_OS"
 
 make_rive_native_plugin() {
     local BUILD_OS=$1
@@ -336,6 +345,7 @@ elif [[ $machine = "linux" ]]; then
         du -hs $COPY_TO/liblibjpeg.a
         du -hs $COPY_TO/liblibwebp.a
         du -hs $COPY_TO/librive_scripting_workspace.a
+        du -hs $COPY_TO/libspirv_cross.a
         du -hs $COPY_TO/libluau_vm.a
         du -hs $COPY_TO/libluau_compiler.a
         du -hs $COPY_TO/libluau_analyzer.a
@@ -377,6 +387,7 @@ elif [[ $machine = "macosx" ]]; then
         cp $OUT_DIR/liblibjpeg.a $TARGET_DIR
         cp $OUT_DIR/liblibwebp.a $TARGET_DIR
         cp $OUT_DIR/librive_scripting_workspace.a $TARGET_DIR
+        cp $OUT_DIR/libspirv_cross.a $TARGET_DIR
         cp $OUT_DIR/libluau_vm.a $TARGET_DIR
         cp $OUT_DIR/libluau_compiler.a $TARGET_DIR
         cp $OUT_DIR/libluau_analyzer.a $TARGET_DIR
@@ -417,6 +428,7 @@ elif [[ $machine = "macosx" ]]; then
             rive_native_lipo_macosx liblibjpeg.a
             rive_native_lipo_macosx liblibwebp.a
             rive_native_lipo_macosx librive_scripting_workspace.a
+            rive_native_lipo_macosx libspirv_cross.a
             rive_native_lipo_macosx libluau_vm.a
             rive_native_lipo_macosx libluau_compiler.a
             rive_native_lipo_macosx libluau_analyzer.a
@@ -436,7 +448,7 @@ elif [[ $machine = "windows" ]]; then
     fi
     export RIVE_OUT=$(out_dir windows x64)
 
-    $RUNTIME_PATH/build_rive.sh $ACTUAL_CONFIG x64 $FLUTTER_RUNTIME --variant=$VARIANT $USE_DEFAULT_RUNTIME --with_rive_scripting $RIVE_TOOLS --with_rive_text --with_rive_layout --with_rive_audio=$RIVE_AUDIO --config=$ACTUAL_CONFIG --out=$(out_dir windows x64) --shared
+    $RUNTIME_PATH/build_rive.sh $ACTUAL_CONFIG x64 $FLUTTER_RUNTIME --variant=$VARIANT $USE_DEFAULT_RUNTIME $WITH_MICROPROFILE --with_rive_canvas --with_rive_scripting $RIVE_TOOLS --with_rive_text --with_rive_layout --with_rive_audio=$RIVE_AUDIO --config=$ACTUAL_CONFIG --out=$(out_dir windows x64) --shared
     pushd $(out_dir windows x64)
     msbuild.exe rive.sln -m:$NUMBER_OF_PROCESSORS
     popd

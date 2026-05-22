@@ -19,6 +19,7 @@ void DataBindContainer::unbindDataBinds()
     {
         dataBind->unbind();
     }
+    m_dataContext = nullptr;
 }
 
 void DataBindContainer::bindDataBindsFromContext(DataContext* dataContext)
@@ -31,10 +32,15 @@ void DataBindContainer::bindDataBindsFromContext(DataContext* dataContext)
             dataBind->as<DataBindContext>()->bindFromContext(dataContext);
         }
     }
+    m_dataContext = dataContext;
 }
 
 bool DataBindContainer::advanceDataBinds(float elapsedSeconds)
 {
+    if (m_dataBinds.size() == 0)
+    {
+        return false;
+    }
     bool didUpdate = false;
     for (auto& dataBind : m_dataBinds)
     {
@@ -76,11 +82,12 @@ void DataBindContainer::addDataBind(DataBind* dataBind)
     {
         m_persistingDataBinds.push_back(dataBind);
     }
-    else
-    {
-        m_dirtyDataBinds.push_back(dataBind);
-    }
     dataBind->container(this);
+    if (m_dataContext && dataBind->is<DataBindContext>())
+    {
+        dataBind->as<DataBindContext>()->bindFromContext(m_dataContext);
+        updateDataBind(dataBind, true);
+    }
 }
 
 void DataBindContainer::updateDataBind(DataBind* dataBind,
@@ -114,6 +121,10 @@ void DataBindContainer::updateDataBind(DataBind* dataBind,
 
 void DataBindContainer::updateDataBinds(bool applyTargetToSource)
 {
+    if (m_persistingDataBinds.size() == 0 && m_dirtyDataBinds.size() == 0)
+    {
+        return;
+    }
     m_isProcessing = true;
     for (auto& dataBind : m_persistingDataBinds)
     {

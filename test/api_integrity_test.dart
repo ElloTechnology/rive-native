@@ -9,8 +9,8 @@ import 'package:rive_native/rive_native.dart' as rive;
 import 'package:rive_native/src/ffi/dynamic_library_helper.dart';
 
 final DynamicLibrary nativeLib = DynamicLibraryHelper.nativeLib;
-final bool Function() _builtWithRiveTools =
-    nativeLib.lookup<NativeFunction<Bool Function()>>('builtWithRiveTools')
+final bool Function() _builtWithRiveTools = nativeLib
+    .lookup<NativeFunction<Bool Function()>>('builtWithRiveTools')
     .asFunction();
 
 final int Function() _debugFileCount = nativeLib
@@ -355,7 +355,7 @@ void main() {
   });
 
   test(
-    'audio events do not keep the file alive',
+    'file lives on with a reference to an audio event',
     () async {
       expect(_debugFileCount(), 0);
       final file = File('test/assets/audio_event_test.riv');
@@ -374,12 +374,12 @@ void main() {
       expect(_debugArtboardCount(), 1);
       expect(_debugStateMachineCount(), 1);
 
-      void eventListener(rive.Event event) {}
+      rive.Event? observedEvent;
+      void eventListener(rive.Event event) {
+        observedEvent = event;
+      }
 
       stateMachine?.addEventListener(eventListener);
-
-      stateMachine?.advanceAndApply(0.016);
-      stateMachine?.advanceAndApply(0.016);
 
       expect(stateMachine?.eventListenerCount, 1);
 
@@ -387,16 +387,31 @@ void main() {
       expect(trigger, isNotNull);
       trigger?.fire();
 
-      stateMachine?.advanceAndApply(0.016);
-      stateMachine?.advanceAndApply(0.016);
-      stateMachine?.advanceAndApply(0.016);
-      stateMachine?.advanceAndApply(0.016);
+      const stepSeconds = 0.016;
+      const maxSteps = 32;
+      var steps = 0;
+      while (observedEvent is! rive.AudioRuntimeEvent && steps < maxSteps) {
+        stateMachine?.advanceAndApply(stepSeconds);
+        steps++;
+      }
+
+      expect(observedEvent, isA<rive.AudioRuntimeEvent>(),
+          reason: 'Expected an AudioRuntimeEvent within '
+              '${maxSteps * stepSeconds}s of playback.');
 
       trigger?.dispose();
 
       stateMachine?.dispose();
       artboard?.dispose();
       riveFile?.dispose();
+
+      // The retained AudioRuntimeEvent transitively keeps the
+      // file/artboard/state machine alive
+      expect(_debugFileCount(), 1);
+      expect(_debugArtboardCount(), 1);
+      expect(_debugStateMachineCount(), 1);
+
+      observedEvent?.dispose();
 
       expect(_debugFileCount(), 0);
       expect(_debugArtboardCount(), 0);

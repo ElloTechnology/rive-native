@@ -40,6 +40,11 @@ else
         kind('StaticLib')
         files({ 'dummy.cpp' })
     end
+    project('spirv_cross')
+    do
+        kind('StaticLib')
+        files({ 'dummy.cpp' })
+    end
     project('brotli')
     do
         kind('StaticLib')
@@ -62,6 +67,11 @@ else
         files({ 'dummy.cpp' })
     end
     project('luau_analyzer')
+    do
+        kind('StaticLib')
+        files({ 'dummy.cpp' })
+    end
+    project('spirv_cross')
     do
         kind('StaticLib')
         files({ 'dummy.cpp' })
@@ -123,6 +133,7 @@ do
                 links({
                     'luau_analyzer',
                     'rive_scripting_workspace',
+                    'spirv_cross',
                     'rust_ffi',
                     'brotli',
                 })
@@ -131,6 +142,11 @@ do
             defines({ 'RIVE_NATIVE_SHARED' })
         else
             kind('StaticLib')
+            filter({ 'options:not flutter_runtime' })
+            do
+                dependson({ 'spirv_cross' })
+            end
+            filter({})
         end
         defines({ 'WITH_RIVE_WORKER' })
     else
@@ -165,6 +181,7 @@ do
             links({
                 'luau_analyzer',
                 'rive_scripting_workspace',
+                'spirv_cross',
                 'rust_ffi',
                 'brotli',
             })
@@ -176,9 +193,10 @@ do
             '-s MAX_WEBGL_VERSION=2',
             -- '-s LEGACY_GL_EMULATION',
             '-s ASSERTIONS=0',
-            '--closure=1',
+            -- '--closure=1',
             '--closure-args="--externs ../../../platform/wasm/externs.js"',
             '-s STACK_SIZE=256kb',
+            '-s INITIAL_MEMORY=64mb',
             -- '-s TOTAL_MEMORY=512mb',
             '-s FORCE_FILESYSTEM=0',
             -- '-DANSI_DECLARATORS',
@@ -188,7 +206,8 @@ do
             -- we need instantiateWasm here until the fix here is in a tagged version
             -- https://github.com/emscripten-core/emscripten/issues/21844
             '-s INCOMING_MODULE_JS_API=onRuntimeInitialized,instantiateWasm',
-            '-s EXPORTED_RUNTIME_METHODS=wasmMemory',
+            '-s EXPORTED_RUNTIME_METHODS=wasmMemory,lengthBytesUTF8,stringToUTF8',
+            '-s EXPORTED_FUNCTIONS=_malloc,_free',
             '-s ALLOW_MEMORY_GROWTH=1',
             '-s WASM=1',
             '-s USE_ES6_IMPORT_META=0',
@@ -233,6 +252,18 @@ do
             'src/rive_luau_binding.cpp',
         })
     end
+    filter({ 'options:not flutter_runtime', 'system:not macosx', 'system:not ios' })
+    do
+        files({
+            'src/rive_luau_binding_gpu.cpp',
+        })
+    end
+    filter({ 'options:not flutter_runtime', 'system:macosx or system:ios' })
+    do
+        files({
+            'src/rive_luau_binding_gpu.mm',
+        })
+    end
     filter({})
     if _OPTIONS['arch'] == 'wasm' then
         files({
@@ -247,19 +278,29 @@ do
         end
         filter({ 'system:windows' })
         do
-            links({ 'd3d11', 'd3dcompiler' })
+            -- `dxguid` provides the GUID symbols (e.g.
+            -- `WKPDID_D3DDebugObjectName`) declared in `<d3d11.h>` /
+            -- `<d3d12.h>`. Required by the Ore D3D11 backend's
+            -- `SetPrivateData(WKPDID_D3DDebugObjectName, ...)` debug-label
+            -- plumbing — without it `lld-link` reports an undefined
+            -- symbol on the rive_native shared-library link step.
+            links({ 'd3d11', 'd3d12', 'd3dcompiler', 'dxguid' })
             files({
                 'platform/windows/rive_native_windows.cpp',
             })
         end
         filter({ 'system:windows', 'options:not flutter_runtime' })
         do
+            files({
+                'src/rive_luau_binding_d3d11.cpp',
+            })
             libdirs({
                 '../../scripting_workspace/target/x86_64-pc-windows-msvc/minimize/',
             })
             links({
                 'luau_analyzer',
                 'rive_scripting_workspace',
+                'spirv_cross',
                 'rust_ffi',
                 'ntdll',
                 'bcrypt',
@@ -271,6 +312,7 @@ do
                 'platform/mac/**.m',
                 'platform/mac/**.mm',
                 'src/pls_binding.mm',
+                'src/rive_luau_binding_metal.mm',
             })
             links({
                 'Cocoa.framework',
@@ -298,6 +340,7 @@ do
                 'platform/ios/**.m',
                 'platform/ios/**.mm',
                 'src/pls_binding.mm',
+                'src/rive_luau_binding_metal.mm',
             })
         end
 
@@ -345,13 +388,16 @@ do
         })
         forceincludes({ 'rive_yoga_renames.h' })
     end
-    
-    includedirs({microprofile})
-    
+
+    if _OPTIONS['with_microprofile'] then
+        includedirs({ microprofile })
+    end
+
     filter({ 'options:not flutter_runtime' })
     do
         includedirs({
             packages .. '/scripting_workspace/include',
+            packages .. '/scripting_workspace/naga_ffi',
             luau .. '/Compiler/include',
             luau .. '/VM/include',
             luau .. '/Common/include',

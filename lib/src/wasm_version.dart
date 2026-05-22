@@ -1,1 +1,1 @@
-const wasmVersion = '39.0.0';
+const wasmVersion = '40.0.0';

@@ -278,6 +278,15 @@ final void Function(Pointer<Void> artboard, Pointer<Float> out)
         .lookup<NativeFunction<Void Function(Pointer<Void>, Pointer<Float>)>>(
             'artboardWorldBounds')
         .asFunction();
+final void Function(Pointer<Void> artboard) _artboardDrawCanvases = nativeLib
+    .lookup<NativeFunction<Void Function(Pointer<Void>)>>(
+        'artboardDrawCanvases')
+    .asFunction();
+final Pointer<Void> Function(Pointer<Void> artboard)
+    _artboardGetDrawCanvasLuauState = nativeLib
+        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>)>>(
+            'artboardGetDrawCanvasLuauState')
+        .asFunction();
 final void Function(Pointer<Void> artboard, Pointer<Void> renderer)
     _artboardDraw = nativeLib
         .lookup<NativeFunction<Void Function(Pointer<Void>, Pointer<Void>)>>(
@@ -919,6 +928,18 @@ final int Function(Pointer<Void>) _getOpenUrlEventTarget = nativeLib
     .lookup<NativeFunction<Uint32 Function(Pointer<Void>)>>(
         'getOpenUrlEventTarget')
     .asFunction();
+final int Function(Pointer<Void>) _getAudioEventAssetId = nativeLib
+    .lookup<NativeFunction<Uint32 Function(Pointer<Void>)>>(
+        'getAudioEventAssetId')
+    .asFunction();
+final Pointer<Utf8> Function(Pointer<Void>) _getAudioEventAssetName = nativeLib
+    .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Void>)>>(
+        'getAudioEventAssetName')
+    .asFunction();
+final double Function(Pointer<Void>) _getAudioEventVolume = nativeLib
+    .lookup<NativeFunction<Float Function(Pointer<Void>)>>(
+        'getAudioEventVolume')
+    .asFunction();
 final int Function(Pointer<Void> stateMachine) _getEventCustomPropertyCount =
     nativeLib
         .lookup<NativeFunction<Size Function(Pointer<Void>)>>(
@@ -1259,6 +1280,11 @@ final void Function(Pointer<Void>, int) _setViewModelInstanceAssetValue =
     nativeLib
         .lookup<NativeFunction<Void Function(Pointer<Void>, Uint32)>>(
             'setViewModelInstanceAssetValue')
+        .asFunction();
+final int Function(Pointer<Void>, Pointer<Void>)
+    _viewModelInstanceAssetImageResolveRuntimeIndex = nativeLib
+        .lookup<NativeFunction<Uint32 Function(Pointer<Void>, Pointer<Void>)>>(
+            'viewModelInstanceAssetImageResolveRuntimeIndex')
         .asFunction();
 final void Function(Pointer<Void>, int) _setViewModelInstanceArtboardValue =
     nativeLib
@@ -2068,6 +2094,21 @@ class FFIRiveFile extends File implements RiveFFIReference, Finalizable {
   @override
   void clearViewModelInstances() {
     _clearRuntimeViewModelInstances(pointer);
+  }
+
+  static const int _uint32Max = 4294967295;
+
+  @override
+  int? resolveViewModelInstanceAssetImageRuntimeIndex(int coreAddress) {
+    if (coreAddress == 0) {
+      return null;
+    }
+    final r = _viewModelInstanceAssetImageResolveRuntimeIndex(
+        pointer, Pointer<Void>.fromAddress(coreAddress));
+    if (r < 0 || r == _uint32Max) {
+      return null;
+    }
+    return r;
   }
 
   @override
@@ -2947,6 +2988,7 @@ class FFIStateMachine extends StateMachine
       Event event = switch (eventType) {
         EventType.general => FFIGeneralEvent(eventReport),
         EventType.openURL => FFIOpenURLEvent(eventReport),
+        EventType.audio => FFIAudioRuntimeEvent(eventReport),
       };
       events.add(event);
     }
@@ -3062,6 +3104,25 @@ class FFIOpenURLEvent extends FFIEvent implements OpenUrlEvent {
   @override
   String toString() {
     return 'OpenURLEvent{type: $type, name: $name, url: $url, target: $target, properties: $properties}';
+  }
+}
+
+class FFIAudioRuntimeEvent extends FFIEvent implements AudioRuntimeEvent {
+  FFIAudioRuntimeEvent(super._native) : super._();
+
+  @override
+  int get assetId => _getAudioEventAssetId(pointer);
+
+  @override
+  String get assetName => safeString(_getAudioEventAssetName(pointer));
+
+  @override
+  double get volume => _getAudioEventVolume(pointer);
+
+  @override
+  String toString() {
+    return 'AudioRuntimeEvent{type: $type, name: $name, assetId: $assetId, '
+        'assetName: $assetName, volume: $volume, properties: $properties}';
   }
 }
 
@@ -3222,6 +3283,19 @@ class FFIRiveArtboard extends Artboard
   }
 
   @override
+  void drawCanvases() {
+    _artboardDrawCanvases(pointer);
+  }
+
+  @override
+  LuauState? get drawCanvasState {
+    final statePtr = _artboardGetDrawCanvasLuauState(pointer);
+    if (statePtr.address == 0) return null;
+    // ignore: deprecated_member_use_from_same_package
+    return LuauStateFFI(statePtr);
+  }
+
+  @override
   void draw(Renderer renderer) {
     assert(riveFactory.isValidRenderer(renderer));
     _artboardDraw(pointer, (renderer as RiveFFIReference).pointer);
@@ -3231,6 +3305,11 @@ class FFIRiveArtboard extends Artboard
   void drawInternal(Renderer renderer) {
     assert(riveFactory.isValidRenderer(renderer));
     _artboardDrawInternal(pointer, (renderer as RiveFFIReference).pointer);
+  }
+
+  @override
+  void advanceFrameId() {
+    _NativeFile.riveAdvanceFrameId();
   }
 
   @override
@@ -4120,16 +4199,16 @@ class FFIRiveInternalViewModelInstanceList
   }
 
   @override
-  void applyValue(List<InternalViewModelInstance>? instances) {
-    if (instances == null || instances.isEmpty) {
+  void applyValue(List<InternalViewModelInstance>? val) {
+    if (val == null || val.isEmpty) {
       _setViewModelInstanceListValue(
           pointer, Pointer<Pointer<Void>>.fromAddress(0), 0);
       return;
     }
-    final count = instances.length;
+    final count = val.length;
     _instanceListScratchBuffer.use(count, (ptr) {
       for (var i = 0; i < count; i++) {
-        ptr[i] = (instances[i] as FFIRiveInternalViewModelInstance).pointer;
+        ptr[i] = (val[i] as FFIRiveInternalViewModelInstance).pointer;
       }
       _setViewModelInstanceListValue(pointer, ptr, count);
     });

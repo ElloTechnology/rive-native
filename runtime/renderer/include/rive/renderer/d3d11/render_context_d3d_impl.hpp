@@ -187,8 +187,10 @@ public:
                                    uint32_t width,
                                    uint32_t height);
 
+#ifdef RIVE_CANVAS
     rcp<RenderCanvas> makeRenderCanvas(uint32_t width,
                                        uint32_t height) override;
+#endif
 
     const D3DCapabilities& d3dCapabilities() const { return m_d3dCapabilities; }
     ID3D11Device* gpu() const { return m_gpu.Get(); }
@@ -220,6 +222,7 @@ private:
     rcp<Texture> makeImageTexture(uint32_t width,
                                   uint32_t height,
                                   uint32_t mipLevelCount,
+                                  GPUTextureFormat,
                                   const uint8_t imageDataRGBAPremul[]) override;
 
     std::unique_ptr<BufferRing> makeUniformBufferRing(

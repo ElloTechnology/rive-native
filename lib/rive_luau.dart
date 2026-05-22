@@ -142,8 +142,13 @@ abstract class LuauState {
 
   /// Adopt a ScriptingVM created by C++ requestVM. Replaces the C++ scripting
   /// context with one compatible with Dart (factory + console callback).
-  static LuauState adopt(int vmPointer, Factory riveFactory) {
-    return adoptLuauState(vmPointer, riveFactory);
+  /// On web, [renderTexture] provides the GL context handle for this VM.
+  static LuauState adopt(
+    int vmPointer,
+    Factory riveFactory, {
+    RenderTexture? renderTexture,
+  }) {
+    return adoptLuauState(vmPointer, riveFactory, renderTexture: renderTexture);
   }
 
   int integerAt(int index);
@@ -189,10 +194,60 @@ abstract class LuauState {
   /// Returns 1 if successful, 0 if the image is null.
   int pushImage(RenderImage image);
 
+  /// Creates a (non-GPU) Canvas and pushes it onto the Lua stack.
+  /// Returns 1 on success, pushes nil and returns 1 on failure.
+  int pushCanvas(int width, int height);
+
+  /// Creates a GPUCanvas and pushes it onto the Lua stack.
+  /// Returns 1 on success, pushes nil and returns 1 on failure.
+  /// The canvas is a 1× presentation target only; MSAA color + depth
+  /// are user-allocated via `GPUTexture.new` and passed in the
+  /// `context:beginRenderPass(desc)` descriptor.
+  int pushGPUCanvas(int width, int height);
+
+  /// Implements `context:beginRenderPass(desc)` for the Dart-side
+  /// editor context. Reads the descriptor from stack index 2 and pushes
+  /// a `ScriptedGPURenderPass` userdata on success.
+  int contextBeginRenderPass();
+
+  /// Begins a GPU frame. Must be called before any GPU canvas draw calls.
+  void gpuBeginFrame();
+
+  /// Ends a GPU frame. Must be called after all GPU canvas draw calls.
+  void gpuEndFrame();
+
   /// Pushes [AudioSource] onto the Lua stack as a ScriptedAudioSource userdata.
   /// Returns 1 if successful, 0 if the image is null.
   int pushAudio(AudioSource audio);
   void pushBlob(String name, Uint8List data);
+
+  void enableDrawCanvasPhase();
+  void disableDrawCanvasPhase();
+
+  /// Looks up a shader by name from the per-VM ScriptingContext (editor) or
+  /// file assets (runtime) and pushes the ScriptedShader onto the stack.
+  /// Returns 1 on success, 0 if not found or compile failed.
+  int pushShader(String name);
+
+  /// Pushes a GPU features table onto the Lua stack. Queries the ORE context
+  /// when available, otherwise returns conservative defaults. Always returns 1.
+  int pushGPUFeatures();
+
+  /// Pushes the platform's preferred canvas color format (a string like
+  /// `"bgra8unorm"` or `"rgba8unorm"`) onto the Lua stack. Always returns 1.
+  int pushPreferredCanvasFormat();
+
+  /// Decodes image data from Lua stack position 2 and pushes a Promise.
+  /// Returns 1 (promise pushed) or 0.
+  int decodeImage();
+
+  /// Poll for completed async tasks (image decodes, etc.) and invoke callbacks.
+  /// Returns the number of callbacks processed.
+  int pollAsyncWork({int maxCallbacks = 16});
+
+  /// Check if there are any pending async tasks.
+  bool get hasPendingAsyncWork;
+
   void setGlobal(String name) => setField(luaGlobalsIndex, name);
 
   /// Pushes on the top of the stack a copy of the element at the given [index].
@@ -227,6 +282,11 @@ abstract class LuauState {
   ///
   /// Returns the type of the pushed value.
   LuauType getField(int index, String name);
+
+  /// lua_rawgetfield equivalent. Pushes onto the stack t[k], where t is the
+  /// table at the given index. The access is raw, that is, it does not invoke
+  /// the __index metamethod. Returns the type of the pushed value.
+  LuauType rawGetField(int index, String name);
 
   /// Does the equivalent to t[k] = v, where t is the value at the given index
   /// and v is the value on the top of the stack.
@@ -319,11 +379,13 @@ abstract class LuauState {
       Vec2D previousPosition, int listenerType, double timeStamp);
   void pushKeyboardListenerInvocation(
       int key, int modifiers, bool isPressed, bool isRepeat);
+
   /// Node script `keyboardEvent` (KeyboardInvocation userdata), not listener
   /// [ScriptedInvocation].
   void pushScriptedKeyboardInvocation(
       int key, int modifiers, bool isPressed, bool isRepeat);
   void pushTextInputListenerInvocation(String text);
+
   /// Node script `textEvent` (TextInputInvocation userdata).
   void pushScriptedTextInputInvocation(String text);
   void pushFocusListenerInvocation(bool isFocus);

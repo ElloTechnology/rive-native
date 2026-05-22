@@ -47,6 +47,7 @@ IOS_LIBS=(
 MACOS_LIBS=(
     "${IOS_LIBS[@]}"
     "librive_scripting_workspace.a"
+    "libspirv_cross.a"
     "libluau_compiler.a"
     "libluau_analyzer.a"
     "libstylua_ffi.a"

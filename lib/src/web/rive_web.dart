@@ -438,6 +438,23 @@ class WebRiveFile extends File {
     RiveWasm.clearRuntimeViewModelInstances.callAsFunction(null, _pointer.toJS);
   }
 
+  static const int _uint32Max = 4294967295;
+
+  @override
+  int? resolveViewModelInstanceAssetImageRuntimeIndex(int coreAddress) {
+    if (_pointer == 0 || coreAddress == 0) {
+      return null;
+    }
+    final r = (RiveWasm.viewModelInstanceAssetImageResolveRuntimeIndex
+                .callAsFunction(null, _pointer.toJS, coreAddress.toJS)
+            as js.JSNumber)
+        .toDartInt;
+    if (r < 0 || r == _uint32Max) {
+      return null;
+    }
+    return r;
+  }
+
   WebRiveFile(this._pointer, this.riveFactory) {
     _finalizer.attach(this, _pointer.toJS, detach: this);
     RiveWasm.initBindingCallbacks.callAsFunctionEx(
@@ -1262,6 +1279,19 @@ class WebRiveArtboard extends Artboard {
   }
 
   @override
+  void drawCanvases() {
+    RiveWasm.artboardDrawCanvases.callAsFunction(null, pointer.toJS);
+  }
+
+  @override
+  LuauState? get drawCanvasState {
+    final statePtr = toPointer(RiveWasm.artboardGetDrawCanvasLuauState
+        .callAsFunction(null, pointer.toJS));
+    if (statePtr == 0) return null;
+    return LuauStateWasm.fromNativePointer(statePtr);
+  }
+
+  @override
   void draw(covariant WebRiveRenderer renderer) {
     assert(riveFactory.isValidRenderer(renderer));
     RiveWasm.artboardDraw
@@ -1273,6 +1303,11 @@ class WebRiveArtboard extends Artboard {
     assert(riveFactory.isValidRenderer(renderer));
     RiveWasm.artboardDrawInternal
         .callAsFunction(null, pointer.toJS, renderer.jsRendererPtr);
+  }
+
+  @override
+  void advanceFrameId() {
+    RiveWasm.riveAdvanceFrameId.callAsFunction(null);
   }
 
   @override
@@ -2281,6 +2316,7 @@ class WebStateMachine extends StateMachine
       Event event = switch (eventType) {
         EventType.general => WebGeneralEvent(eventReport),
         EventType.openURL => WebOpenURLEvent(eventReport),
+        EventType.audio => WebAudioRuntimeEvent(eventReport),
       };
       events.add(event);
     }
@@ -2432,6 +2468,39 @@ class WebOpenURLEvent extends WebEvent implements OpenUrlEvent {
   @override
   String toString() {
     return 'OpenURLEvent{type: $type, name: $name, url: $url, target: $target, properties: $properties}';
+  }
+}
+
+class WebAudioRuntimeEvent extends WebEvent implements AudioRuntimeEvent {
+  WebAudioRuntimeEvent(super._native) : super._();
+
+  @override
+  int get assetId =>
+      (RiveWasm.getAudioEventAssetId.callAsFunction(null, pointer.toJS)
+              as js.JSNumber)
+          .toDartInt;
+
+  @override
+  String get assetName {
+    final stringPointer = (RiveWasm.getAudioEventAssetName
+            .callAsFunction(null, pointer.toJS) as js.JSNumber)
+        .toDartInt;
+    if (stringPointer == 0) {
+      return '';
+    }
+    return RiveWasm.toDartString(stringPointer);
+  }
+
+  @override
+  double get volume =>
+      (RiveWasm.getAudioEventVolume.callAsFunction(null, pointer.toJS)
+              as js.JSNumber)
+          .toDartDouble;
+
+  @override
+  String toString() {
+    return 'AudioRuntimeEvent{type: $type, name: $name, assetId: $assetId, '
+        'assetName: $assetName, volume: $volume, properties: $properties}';
   }
 }
 
@@ -3289,8 +3358,8 @@ class WebInternalViewModelInstanceList
   }
 
   @override
-  void applyValue(List<InternalViewModelInstance>? instances) {
-    if (instances == null || instances.isEmpty) {
+  void applyValue(List<InternalViewModelInstance>? val) {
+    if (val == null || val.isEmpty) {
       RiveWasm.setViewModelInstanceListValue
           .callAsFunction(null, _pointer.toJS, 0.toJS, 0.toJS);
       return;
@@ -3298,14 +3367,14 @@ class WebInternalViewModelInstanceList
     // WASM-heap buffer: allocate in WASM, bulk-write pointer list, call native, free.
     const int pointerSizeBytes = 4; // 32-bit pointers in WASM
     final bufferPtr = (RiveWasm.allocateBuffer.callAsFunction(
-            null, (instances.length * pointerSizeBytes).toJS) as js.JSNumber)
+            null, (val.length * pointerSizeBytes).toJS) as js.JSNumber)
         .toDartInt;
-    final view = RiveWasm.heapViewU32(bufferPtr, instances.length);
-    for (var i = 0; i < instances.length; i++) {
-      view[i] = (instances[i] as WebRiveInternalViewModelInstance).pointer;
+    final view = RiveWasm.heapViewU32(bufferPtr, val.length);
+    for (var i = 0; i < val.length; i++) {
+      view[i] = (val[i] as WebRiveInternalViewModelInstance).pointer;
     }
-    RiveWasm.setViewModelInstanceListValue.callAsFunction(
-        null, _pointer.toJS, bufferPtr.toJS, instances.length.toJS);
+    RiveWasm.setViewModelInstanceListValue
+        .callAsFunction(null, _pointer.toJS, bufferPtr.toJS, val.length.toJS);
     RiveWasm.deleteBuffer.callAsFunction(null, bufferPtr.toJS);
   }
 }

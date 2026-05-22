@@ -5,8 +5,11 @@
 #include "rive/renderer/webgpu/render_context_webgpu_impl.hpp"
 
 #include "rive/renderer/draw.hpp"
+#ifdef RIVE_CANVAS
 #include "rive/renderer/render_canvas.hpp"
+#endif
 #include "rive/renderer/stack_vector.hpp"
+#include "rive/gpu_texture_format.hpp"
 #include "shaders/constants.glsl"
 
 #include <sstream>
@@ -14,15 +17,15 @@
 
 namespace spirv
 {
-#include "generated/shaders/spirv/blit_texture_as_draw_filtered.vert.h"
-#include "generated/shaders/spirv/blit_texture_as_draw_filtered.frag.h"
+#include "generated/shaders/spirv/blit_texture_as_draw_filtered.webgpu_vert.h"
+#include "generated/shaders/spirv/blit_texture_as_draw_filtered.webgpu_frag.h"
 #include "generated/shaders/spirv/color_ramp.vert.h"
 #include "generated/shaders/spirv/color_ramp.frag.h"
-#include "generated/shaders/spirv/tessellate.vert.h"
-#include "generated/shaders/spirv/tessellate.frag.h"
-#include "generated/shaders/spirv/render_atlas.vert.h"
-#include "generated/shaders/spirv/render_atlas_fill.frag.h"
-#include "generated/shaders/spirv/render_atlas_stroke.frag.h"
+#include "generated/shaders/spirv/tessellate.webgpu_vert.h"
+#include "generated/shaders/spirv/tessellate.webgpu_frag.h"
+#include "generated/shaders/spirv/render_atlas.webgpu_vert.h"
+#include "generated/shaders/spirv/render_atlas_fill.webgpu_frag.h"
+#include "generated/shaders/spirv/render_atlas_stroke.webgpu_frag.h"
 #include "generated/shaders/spirv/draw_msaa_path.webgpu_vert.h"
 #include "generated/shaders/spirv/draw_msaa_path.webgpu_noclipdistance_vert.h"
 #include "generated/shaders/spirv/draw_msaa_path.webgpu_frag.h"
@@ -566,9 +569,9 @@ public:
         wgpu::BindGroupLayout layouts[] = {
             m_perFlushBindingsLayout,
             impl->m_emptyBindingsLayout,
-            impl->m_drawBindGroupLayouts[IMMUTABLE_SAMPLER_BINDINGS_SET],
+            impl->m_emptyBindingsLayout,
+            impl->m_drawBindGroupLayouts[WEBGPU_SAMPLER_BINDINGS_SET],
         };
-        static_assert(IMMUTABLE_SAMPLER_BINDINGS_SET == 2);
 
         wgpu::PipelineLayoutDescriptor pipelineLayoutDesc = {
             .bindGroupLayoutCount = std::size(layouts),
@@ -621,14 +624,14 @@ public:
         else
 #endif
         {
-            vertexShader =
-                compile_shader_module_spirv(device,
-                                            spirv::tessellate_vert,
-                                            std::size(spirv::tessellate_vert));
-            fragmentShader =
-                compile_shader_module_spirv(device,
-                                            spirv::tessellate_frag,
-                                            std::size(spirv::tessellate_frag));
+            vertexShader = compile_shader_module_spirv(
+                device,
+                spirv::tessellate_webgpu_vert,
+                std::size(spirv::tessellate_webgpu_vert));
+            fragmentShader = compile_shader_module_spirv(
+                device,
+                spirv::tessellate_webgpu_frag,
+                std::size(spirv::tessellate_webgpu_frag));
         }
 
         wgpu::VertexAttribute attrs[] = {
@@ -726,9 +729,9 @@ public:
         wgpu::BindGroupLayout layouts[] = {
             m_perFlushBindingsLayout,
             impl->m_emptyBindingsLayout,
-            impl->m_drawBindGroupLayouts[IMMUTABLE_SAMPLER_BINDINGS_SET],
+            impl->m_emptyBindingsLayout,
+            impl->m_drawBindGroupLayouts[WEBGPU_SAMPLER_BINDINGS_SET],
         };
-        static_assert(IMMUTABLE_SAMPLER_BINDINGS_SET == 2);
 
         wgpu::PipelineLayoutDescriptor pipelineLayoutDesc = {
             .bindGroupLayoutCount = std::size(layouts),
@@ -803,16 +806,16 @@ public:
         {
             vertexShader = compile_shader_module_spirv(
                 device,
-                spirv::render_atlas_vert,
-                std::size(spirv::render_atlas_vert));
+                spirv::render_atlas_webgpu_vert,
+                std::size(spirv::render_atlas_webgpu_vert));
             fillFragmentShader = compile_shader_module_spirv(
                 device,
-                spirv::render_atlas_fill_frag,
-                std::size(spirv::render_atlas_fill_frag));
+                spirv::render_atlas_fill_webgpu_frag,
+                std::size(spirv::render_atlas_fill_webgpu_frag));
             strokeFragmentShader = compile_shader_module_spirv(
                 device,
-                spirv::render_atlas_stroke_frag,
-                std::size(spirv::render_atlas_stroke_frag));
+                spirv::render_atlas_stroke_webgpu_frag,
+                std::size(spirv::render_atlas_stroke_webgpu_frag));
         }
 
         wgpu::VertexAttribute attrs[] = {
@@ -937,7 +940,7 @@ public:
             {
                 language = WGPUWagyuShaderLanguage_GLSL;
                 versionString = "#version 460";
-                addDefine(GLSL_TARGET_VULKAN);
+                addDefine(GLSL_TARGET_SPIRV);
             }
             if (plsType ==
                 PixelLocalStorageType::GL_EXT_shader_pixel_local_storage)
@@ -1188,10 +1191,10 @@ public:
                     // MSAA render passes get initialized by drawing the
                     // previous contents into the framebuffer.
                     // (LoadAction::preserveRenderTarget only.)
-                    vertCode =
-                        make_span(spirv::blit_texture_as_draw_filtered_vert);
-                    fragCode =
-                        make_span(spirv::blit_texture_as_draw_filtered_frag);
+                    vertCode = make_span(
+                        spirv::blit_texture_as_draw_filtered_webgpu_vert);
+                    fragCode = make_span(
+                        spirv::blit_texture_as_draw_filtered_webgpu_frag);
                     break;
 
                 case DrawType::imageRect:
@@ -1322,6 +1325,13 @@ RenderContextWebGPUImpl::RenderContextWebGPUImpl(
     m_platformFeatures.clipSpaceBottomUp = true;
     m_platformFeatures.framebufferBottomUp = false;
     m_platformFeatures.msaaColorPreserveNeedsDraw = true;
+
+    m_platformFeatures.supportsTextureCompressionBC =
+        m_device.HasFeature(wgpu::FeatureName::TextureCompressionBC);
+    m_platformFeatures.supportsTextureCompressionASTC =
+        m_device.HasFeature(wgpu::FeatureName::TextureCompressionASTC);
+    m_platformFeatures.supportsTextureCompressionETC2 =
+        m_device.HasFeature(wgpu::FeatureName::TextureCompressionETC2);
 }
 
 void RenderContextWebGPUImpl::initGPUObjects()
@@ -1497,7 +1507,7 @@ void RenderContextWebGPUImpl::initGPUObjects()
                 },
         },
         {
-            .binding = IMAGE_SAMPLER_IDX,
+            .binding = WEBGPU_IMAGE_SAMPLER_IDX,
             .visibility = wgpu::ShaderStage::Fragment,
             .sampler = {.type = wgpu::SamplerBindingType::Filtering},
         },
@@ -1544,7 +1554,7 @@ void RenderContextWebGPUImpl::initGPUObjects()
         .entries = drawBindingSamplerLayouts,
     };
 
-    m_drawBindGroupLayouts[IMMUTABLE_SAMPLER_BINDINGS_SET] =
+    m_drawBindGroupLayouts[WEBGPU_SAMPLER_BINDINGS_SET] =
         m_device.CreateBindGroupLayout(&samplerBindingsDesc);
 
     wgpu::SamplerDescriptor linearSamplerDesc = {
@@ -1591,7 +1601,7 @@ void RenderContextWebGPUImpl::initGPUObjects()
     };
 
     wgpu::BindGroupDescriptor samplerBindGroupDesc = {
-        .layout = m_drawBindGroupLayouts[IMMUTABLE_SAMPLER_BINDINGS_SET],
+        .layout = m_drawBindGroupLayouts[WEBGPU_SAMPLER_BINDINGS_SET],
         .entryCount = std::size(samplerBindingEntries),
         .entries = samplerBindingEntries,
     };
@@ -1627,17 +1637,19 @@ void RenderContextWebGPUImpl::initGPUObjects()
                 wgpuDeviceCreateBindGroupLayout(m_device.Get(),
                                                 &inputAttachmentsLayoutDesc));
     }
+    else
+    {
+        m_drawBindGroupLayouts[PLS_TEXTURE_BINDINGS_SET] =
+            m_emptyBindingsLayout;
+    }
 #endif
 
     wgpu::PipelineLayoutDescriptor drawPipelineLayoutDesc = {
-        .bindGroupLayoutCount = static_cast<size_t>(
-#ifdef RIVE_WAGYU
-            supportsPLSInputAttachmentBindings ? BINDINGS_SET_COUNT :
-#endif
-                                               BINDINGS_SET_COUNT - 1),
+        .bindGroupLayoutCount = static_cast<size_t>(WEBGPU_BINDINGS_SET_COUNT),
         .bindGroupLayouts = m_drawBindGroupLayouts,
     };
-    static_assert(PLS_TEXTURE_BINDINGS_SET == BINDINGS_SET_COUNT - 1);
+    static_assert(PLS_TEXTURE_BINDINGS_SET == WEBGPU_BINDINGS_SET_COUNT - 2);
+    static_assert(WEBGPU_SAMPLER_BINDINGS_SET == WEBGPU_BINDINGS_SET_COUNT - 1);
 
     m_drawPipelineLayout =
         m_device.CreatePipelineLayout(&drawPipelineLayoutDesc);
@@ -1925,6 +1937,7 @@ rcp<RenderTargetWebGPU> RenderContextWebGPUImpl::makeRenderTarget(
                                       height));
 }
 
+#ifdef RIVE_CANVAS
 rcp<RenderCanvas> RenderContextWebGPUImpl::makeRenderCanvas(uint32_t width,
                                                             uint32_t height)
 {
@@ -1952,6 +1965,7 @@ rcp<RenderCanvas> RenderContextWebGPUImpl::makeRenderCanvas(uint32_t width,
     return make_rcp<RenderCanvas>(std::move(renderImage),
                                   std::move(renderTarget));
 }
+#endif
 
 class RenderBufferWebGPUImpl : public RenderBuffer
 {
@@ -2069,7 +2083,7 @@ public:
                     },
             },
             {
-                .binding = IMAGE_SAMPLER_IDX,
+                .binding = WEBGPU_IMAGE_SAMPLER_IDX,
                 .visibility = wgpu::ShaderStage::Fragment,
                 .sampler =
                     {
@@ -2101,13 +2115,13 @@ public:
 
         wgpu::ShaderModule vertexShader = compile_shader_module_spirv(
             device,
-            spirv::blit_texture_as_draw_filtered_vert,
-            std::size(spirv::blit_texture_as_draw_filtered_vert));
+            spirv::blit_texture_as_draw_filtered_webgpu_vert,
+            std::size(spirv::blit_texture_as_draw_filtered_webgpu_vert));
 
         wgpu::ShaderModule fragmentShader = compile_shader_module_spirv(
             device,
-            spirv::blit_texture_as_draw_filtered_frag,
-            std::size(spirv::blit_texture_as_draw_filtered_frag));
+            spirv::blit_texture_as_draw_filtered_webgpu_frag,
+            std::size(spirv::blit_texture_as_draw_filtered_webgpu_frag));
 
         wgpu::ColorTargetState colorTargetState = {
             .format = wgpu::TextureFormat::RGBA8Unorm,
@@ -2199,7 +2213,7 @@ void RenderContextWebGPUImpl::generateMipmaps(wgpu::Texture texture)
                 .textureView = srcView,
             },
             {
-                .binding = IMAGE_SAMPLER_IDX,
+                .binding = WEBGPU_IMAGE_SAMPLER_IDX,
                 .sampler = m_linearSampler,
             },
         };
@@ -2227,8 +2241,14 @@ rcp<Texture> RenderContextWebGPUImpl::makeImageTexture(
     uint32_t width,
     uint32_t height,
     uint32_t mipLevelCount,
+    GPUTextureFormat format,
     const uint8_t imageDataRGBAPremul[])
 {
+    if (format != GPUTextureFormat::rgba32)
+    {
+        assert(!"unsupported format");
+        return nullptr;
+    }
     wgpu::TextureDescriptor textureDesc = {
         .usage =
             wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst,
@@ -2953,7 +2973,7 @@ void RenderContextWebGPUImpl::initDrawRenderPass(
                          desc.renderTarget->height(),
                          0.0,
                          1.0);
-    drawPass.SetBindGroup(IMMUTABLE_SAMPLER_BINDINGS_SET, m_samplerBindings);
+    drawPass.SetBindGroup(WEBGPU_SAMPLER_BINDINGS_SET, m_samplerBindings);
 }
 
 static wgpu::Buffer webgpu_buffer(const BufferRing* bufferRing)
@@ -3198,8 +3218,7 @@ void RenderContextWebGPUImpl::flush(const FlushDescriptor& desc)
                                 wgpu::IndexFormat::Uint16);
         tessPass.SetBindGroup(PER_FLUSH_BINDINGS_SET,
                               m_device.CreateBindGroup(&tessBindGroupDesc));
-        tessPass.SetBindGroup(IMMUTABLE_SAMPLER_BINDINGS_SET,
-                              m_samplerBindings);
+        tessPass.SetBindGroup(WEBGPU_SAMPLER_BINDINGS_SET, m_samplerBindings);
         tessPass.DrawIndexed(std::size(gpu::kTessSpanIndices),
                              desc.tessVertexSpanCount,
                              0,
@@ -3242,8 +3261,7 @@ void RenderContextWebGPUImpl::flush(const FlushDescriptor& desc)
                                  wgpu::IndexFormat::Uint16);
         atlasPass.SetBindGroup(PER_FLUSH_BINDINGS_SET,
                                m_device.CreateBindGroup(&atlasBindGroupDesc));
-        atlasPass.SetBindGroup(IMMUTABLE_SAMPLER_BINDINGS_SET,
-                               m_samplerBindings);
+        atlasPass.SetBindGroup(WEBGPU_SAMPLER_BINDINGS_SET, m_samplerBindings);
 
         if (desc.atlasFillBatchCount != 0)
         {
@@ -3522,7 +3540,7 @@ void RenderContextWebGPUImpl::flush(const FlushDescriptor& desc)
                     .textureView = imageTextureView,
                 },
                 {
-                    .binding = IMAGE_SAMPLER_IDX,
+                    .binding = WEBGPU_IMAGE_SAMPLER_IDX,
                     .sampler = m_imageSamplers[batch.imageSampler.asKey()],
                 },
             };
@@ -3692,5 +3710,26 @@ std::unique_ptr<RenderContext> RenderContextWebGPUImpl::MakeContext(
         new RenderContextWebGPUImpl(adapter, device, queue, contextOptions));
     impl->initGPUObjects();
     return std::make_unique<RenderContext>(std::move(impl));
+}
+
+void* RenderContextWebGPUImpl::makeCommandBuffer()
+{
+    wgpu::CommandEncoder encoder = m_device.CreateCommandEncoder();
+    // Release the C++ wrapper's ref and return the raw handle.
+    // The caller (commitCommandBuffer) will re-acquire it.
+    return encoder.MoveToCHandle();
+}
+
+void RenderContextWebGPUImpl::commitCommandBuffer(void* commandBuffer)
+{
+    if (commandBuffer == nullptr)
+    {
+        return;
+    }
+    // Re-acquire ownership of the raw handle.
+    wgpu::CommandEncoder encoder = wgpu::CommandEncoder::Acquire(
+        static_cast<WGPUCommandEncoder>(commandBuffer));
+    wgpu::CommandBuffer commands = encoder.Finish();
+    m_queue.Submit(1, &commands);
 }
 } // namespace rive::gpu

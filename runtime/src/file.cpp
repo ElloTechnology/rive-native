@@ -17,7 +17,7 @@
 #include "rive/importers/data_converter_formula_importer.hpp"
 #include "rive/importers/enum_importer.hpp"
 #include "rive/importers/file_asset_importer.hpp"
-#include "rive/importers/script_asset_importer.hpp"
+#include "rive/importers/text_asset_importer.hpp"
 #include "rive/importers/import_stack.hpp"
 #ifdef WITH_RIVE_SCRIPTING
 #include "rive/lua/rive_lua_libs.hpp"
@@ -70,11 +70,13 @@
 #include "rive/assets/audio_asset.hpp"
 #include "rive/assets/blob_asset.hpp"
 #include "rive/assets/script_asset.hpp"
+#include "rive/assets/shader_asset.hpp"
 #include "rive/assets/file_asset_contents.hpp"
 #include "rive/scripted/scripted_drawable.hpp"
 #include "rive/scripted/scripted_layout.hpp"
 #include "rive/scripted/scripted_object.hpp"
 #include "rive/scripted/scripted_path_effect.hpp"
+#include "rive/scripted/scripted_interpolator.hpp"
 #include "rive/viewmodel/viewmodel.hpp"
 #include "rive/viewmodel/data_enum.hpp"
 #include "rive/viewmodel/viewmodel_instance.hpp"
@@ -293,7 +295,7 @@ ImportResult File::read(BinaryReader& reader, const RuntimeHeader& header)
 {
     ImportStack importStack;
 #ifdef WITH_RIVE_SCRIPTING
-    std::vector<InBandByteCode> inBandBytecode;
+    std::vector<InBandContent> inBandContent;
 #endif
     // TODO: @hernan consider moving this to a special importer. It's not that
     // simple because Core doesn't have a typeKey, so it should be treated as
@@ -334,6 +336,7 @@ ImportResult File::read(BinaryReader& reader, const RuntimeHeader& header)
                 case AudioAsset::typeKey:
                 case BlobAsset::typeKey:
                 case ScriptAsset::typeKey:
+                case ShaderAsset::typeKey:
                 {
                     auto fa = object->as<FileAsset>();
                     m_fileAssets.push_back(rcp<FileAsset>(fa));
@@ -487,12 +490,23 @@ ImportResult File::read(BinaryReader& reader, const RuntimeHeader& header)
             {
                 auto scriptAsset = object->as<ScriptAsset>();
                 stackObject =
-                    std::make_unique<ScriptAssetImporter>(scriptAsset,
-                                                          m_assetLoader,
-                                                          m_factory,
-                                                          &inBandBytecode);
+                    std::make_unique<TextAssetImporter>(scriptAsset,
+                                                        m_assetLoader,
+                                                        m_factory,
+                                                        &inBandContent);
                 stackType = FileAsset::typeKey;
                 scriptAsset->file(this);
+                break;
+            }
+            case ShaderAsset::typeKey:
+            {
+                auto shaderAsset = object->as<ShaderAsset>();
+                stackObject =
+                    std::make_unique<TextAssetImporter>(shaderAsset,
+                                                        m_assetLoader,
+                                                        m_factory,
+                                                        &inBandContent);
+                stackType = FileAsset::typeKey;
                 break;
             }
 #endif
@@ -572,6 +586,7 @@ ImportResult File::read(BinaryReader& reader, const RuntimeHeader& header)
             case ScriptedPathEffect::typeKey:
             case ScriptedListenerAction::typeKey:
             case ScriptedTransitionCondition::typeKey:
+            case ScriptedInterpolator::typeKey:
             {
                 auto scriptedObject = ScriptedObject::from(object);
                 if (scriptedObject != nullptr)
@@ -620,6 +635,11 @@ ImportResult File::read(BinaryReader& reader, const RuntimeHeader& header)
             {
                 m_keyframeInterpolators.push_back(
                     object->as<KeyFrameInterpolator>());
+            }
+            if (object->is<ScriptedInterpolator>())
+            {
+                m_scriptedInterpolators.push_back(
+                    object->as<ScriptedInterpolator>());
             }
         }
         else if (object->is<ScrollPhysics>())
@@ -685,6 +705,15 @@ void File::registerScripts()
             // and retries
             vm->performRegistration();
         }
+
+        for (auto& interpolator : m_scriptedInterpolators)
+        {
+            auto scriptAsset = interpolator->scriptAsset();
+            if (scriptAsset != nullptr)
+            {
+                scriptAsset->initScriptedObject(interpolator);
+            }
+        }
     }
 }
 
@@ -703,7 +732,7 @@ lua_State* File::scriptingState()
 
 void File::setScriptingVM(rcp<ScriptingVM> vm)
 {
-#if defined(WITH_RIVE_TOOLS)
+#ifdef WITH_RIVE_TOOLS
     if (m_scriptingVM != nullptr)
     {
         ScriptingContext* context = m_scriptingVM->context();
@@ -718,7 +747,7 @@ void File::setScriptingVM(rcp<ScriptingVM> vm)
 
 void File::cleanupScriptingVM()
 {
-#if defined(WITH_RIVE_TOOLS)
+#ifdef WITH_RIVE_TOOLS
     if (m_scriptingVM != nullptr)
     {
         ScriptingContext* context = m_scriptingVM->context();
@@ -768,22 +797,35 @@ std::string File::artboardNameAt(size_t index) const
     return ab ? ab->name() : "";
 }
 
+std::unique_ptr<ArtboardInstance> File::instanceArtboard(Artboard* ab) const
+{
+    if (ab)
+    {
+        auto artboardInstance = ab->instance();
+#ifdef WITH_RIVE_SCRIPTING
+        artboardInstance->scriptingVM(m_scriptingVM.get());
+#endif
+        return artboardInstance;
+    }
+    return nullptr;
+}
+
 std::unique_ptr<ArtboardInstance> File::artboardDefault() const
 {
     auto ab = this->artboard();
-    return ab ? ab->instance() : nullptr;
+    return instanceArtboard(ab);
 }
 
 std::unique_ptr<ArtboardInstance> File::artboardAt(size_t index) const
 {
     auto ab = this->artboard(index);
-    return ab ? ab->instance() : nullptr;
+    return instanceArtboard(ab);
 }
 
 std::unique_ptr<ArtboardInstance> File::artboardNamed(std::string name) const
 {
     auto ab = this->artboard(name);
-    return ab ? ab->instance() : nullptr;
+    return instanceArtboard(ab);
 }
 
 rcp<BindableArtboard> File::bindableArtboardNamed(std::string name) const

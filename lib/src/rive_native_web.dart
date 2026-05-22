@@ -182,6 +182,39 @@ base class _WebRenderTexture extends RenderTexture {
   bool needsResize(int width, int height) => false;
 }
 
+/// Extracts the WebGL context handle from a web [RenderTexture].
+/// Returns 0 if the texture is null or not a web render texture.
+int webGLHandleFromRenderTexture(RenderTexture? texture) {
+  if (texture is! _WebRenderTexture) return 0;
+  final renderer = texture.jsRenderContext;
+  if (renderer == null) return 0;
+  final handle = renderer.getProperty('_handle'.toJS);
+  if (handle == null || !handle.isA<js.JSNumber>()) return 0;
+  return (handle as js.JSNumber).toDartInt;
+}
+
+/// Extracts the ore::Context* pointer from a web [RenderTexture].
+/// Returns 0 if the texture is null or not a web render texture.
+int webOreCtxPtrFromRenderTexture(RenderTexture? texture) {
+  if (texture is! _WebRenderTexture) return 0;
+  final renderer = texture.jsRenderContext;
+  if (renderer == null) return 0;
+  final ptr = renderer.getProperty('_oreCtxPtr'.toJS);
+  if (ptr == null || !ptr.isA<js.JSNumber>()) return 0;
+  return (ptr as js.JSNumber).toDartInt;
+}
+
+/// Extracts the gpu::RenderContext* pointer from a web [RenderTexture].
+/// Returns 0 if the texture is null or not a web render texture.
+int webRenderCtxPtrFromRenderTexture(RenderTexture? texture) {
+  if (texture is! _WebRenderTexture) return 0;
+  final renderer = texture.jsRenderContext;
+  if (renderer == null) return 0;
+  final ptr = renderer.getProperty('_renderCtxPtr'.toJS);
+  if (ptr == null || !ptr.isA<js.JSNumber>()) return 0;
+  return (ptr as js.JSNumber).toDartInt;
+}
+
 class WasmBuffer {
   js.JSAny _pointer;
   late Uint8List _data;
@@ -459,6 +492,8 @@ class RiveWasm {
   static late js.JSFunction deleteVMIRuntime;
   static late js.JSFunction deleteViewModelRuntime;
   static late js.JSFunction artboardDraw;
+  static late js.JSFunction artboardDrawCanvases;
+  static late js.JSFunction artboardGetDrawCanvasLuauState;
   static late js.JSFunction artboardDrawInternal;
   static late js.JSFunction artboardReset;
   static late js.JSFunction artboardName;
@@ -542,6 +577,9 @@ class RiveWasm {
   static late js.JSFunction getEventName;
   static late js.JSFunction getOpenUrlEventUrl;
   static late js.JSFunction getOpenUrlEventTarget;
+  static late js.JSFunction getAudioEventAssetId;
+  static late js.JSFunction getAudioEventAssetName;
+  static late js.JSFunction getAudioEventVolume;
   static late js.JSFunction getEventCustomPropertyCount;
   static late js.JSFunction getEventCustomProperty;
   static late js.JSFunction getCustomPropertyNumber;
@@ -597,6 +635,7 @@ class RiveWasm {
   static late js.JSFunction setViewModelInstanceBooleanValue;
   static late js.JSFunction setViewModelInstanceTriggerValue;
   static late js.JSFunction setViewModelInstanceAssetValue;
+  static late js.JSFunction viewModelInstanceAssetImageResolveRuntimeIndex;
   static late js.JSFunction setViewModelInstanceArtboardValue;
   static late js.JSFunction setViewModelInstanceAdvanced;
   static late js.JSFunction setViewModelInstanceEnumValue;
@@ -946,6 +985,10 @@ class RiveWasm {
     deleteVMIRuntime = module['_deleteVMIRuntime'] as js.JSFunction;
     deleteViewModelRuntime = module['_deleteViewModelRuntime'] as js.JSFunction;
     artboardDraw = module['_artboardDraw'] as js.JSFunction;
+    artboardDrawCanvases =
+        module['_artboardDrawCanvases'] as js.JSFunction;
+    artboardGetDrawCanvasLuauState =
+        module['_artboardGetDrawCanvasLuauState'] as js.JSFunction;
     artboardDrawInternal = module['_artboardDrawInternal'] as js.JSFunction;
     artboardReset = module['_artboardReset'] as js.JSFunction;
     artboardName = module['_artboardName'] as js.JSFunction;
@@ -1085,6 +1128,10 @@ class RiveWasm {
     getEventName = module['_getEventName'] as js.JSFunction;
     getOpenUrlEventUrl = module['_getOpenUrlEventUrl'] as js.JSFunction;
     getOpenUrlEventTarget = module['_getOpenUrlEventTarget'] as js.JSFunction;
+    getAudioEventAssetId = module['_getAudioEventAssetId'] as js.JSFunction;
+    getAudioEventAssetName =
+        module['_getAudioEventAssetName'] as js.JSFunction;
+    getAudioEventVolume = module['_getAudioEventVolume'] as js.JSFunction;
     getEventCustomPropertyCount =
         module['_getEventCustomPropertyCount'] as js.JSFunction;
     getEventCustomProperty = module['getEventCustomProperty'] as js.JSFunction;
@@ -1165,6 +1212,9 @@ class RiveWasm {
         module['_setViewModelInstanceTriggerValue'] as js.JSFunction;
     setViewModelInstanceAssetValue =
         module['_setViewModelInstanceAssetValue'] as js.JSFunction;
+    viewModelInstanceAssetImageResolveRuntimeIndex =
+        module['_viewModelInstanceAssetImageResolveRuntimeIndex']
+            as js.JSFunction;
     setViewModelInstanceArtboardValue =
         module['_setViewModelInstanceArtboardValue'] as js.JSFunction;
     setViewModelInstanceAdvanced =

@@ -29,8 +29,8 @@ Rive Flutter's native macOS plugin.
                             "USER_HEADER_SEARCH_PATHS" => '"$(PODS_TARGET_SRCROOT)/../native/include"',
                             "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" => "\"$(PODS_TARGET_SRCROOT)/../native/build/iphoneos/bin/#{rive_build_type}\"",
                             "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" => '"$(PODS_TARGET_SRCROOT)/../native/build/iphoneos/bin/emulator"',
-                            "OTHER_LDFLAGS[sdk=iphoneos*]" => "-Wl,-force_load,$(PODS_TARGET_SRCROOT)/../native/build/iphoneos/bin/#{rive_build_type}/librive_native.a -lrive -lrive_pls_renderer -lrive_yoga -lrive_harfbuzz -lrive_sheenbidi -lrive_decoders -llibpng -lzlib -llibjpeg -llibwebp -lminiaudio -lluau_vm -lluau_compiler -lluau_analyzer -lrive_scripting_workspace -lbrotli",
-                            "OTHER_LDFLAGS[sdk=iphonesimulator*]" => "-Wl,-force_load,$(PODS_TARGET_SRCROOT)/../native/build/iphoneos/bin/emulator/librive_native.a -lrive -lrive_pls_renderer -lrive_yoga -lrive_harfbuzz -lrive_sheenbidi -lrive_decoders -llibpng -lzlib -llibjpeg -llibwebp -lminiaudio -lluau_vm -lluau_compiler -lluau_analyzer -lrive_scripting_workspace -lbrotli",
+                            "OTHER_LDFLAGS[sdk=iphoneos*]" => "-Wl,-force_load,$(PODS_TARGET_SRCROOT)/../native/build/iphoneos/bin/#{rive_build_type}/librive_native.a -lrive -lrive_pls_renderer -lrive_yoga -lrive_harfbuzz -lrive_sheenbidi -lrive_decoders -llibpng -lzlib -llibjpeg -llibwebp -lminiaudio -lluau_vm -lluau_compiler -lluau_analyzer -lrive_scripting_workspace -lspirv_cross -lbrotli",
+                            "OTHER_LDFLAGS[sdk=iphonesimulator*]" => "-Wl,-force_load,$(PODS_TARGET_SRCROOT)/../native/build/iphoneos/bin/emulator/librive_native.a -lrive -lrive_pls_renderer -lrive_yoga -lrive_harfbuzz -lrive_sheenbidi -lrive_decoders -llibpng -lzlib -llibjpeg -llibwebp -lminiaudio -lluau_vm -lluau_compiler -lluau_analyzer -lrive_scripting_workspace -lspirv_cross -lbrotli",
                             "CLANG_CXX_LANGUAGE_STANDARD" => "c++17",
                             "CLANG_CXX_LIBRARY" => "libc++" }
 

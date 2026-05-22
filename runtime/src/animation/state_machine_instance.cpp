@@ -5,6 +5,7 @@
 #include "rive/animation/any_state.hpp"
 #include "rive/animation/keyframe_interpolator.hpp"
 #include "rive/animation/entry_state.hpp"
+#include "rive/animation/exit_state.hpp"
 #include "rive/animation/layer_state_flags.hpp"
 #include "rive/animation/nested_linear_animation.hpp"
 #include "rive/animation/nested_state_machine.hpp"
@@ -70,6 +71,37 @@
 #include <cmath>
 
 using namespace rive;
+
+#ifdef RIVE_MICROPROFILE
+#include "rive/profiler/rive_profile.hpp"
+static std::string getStateName(const StateInstance* stateInstance)
+{
+    if (stateInstance == nullptr)
+    {
+        return "(null)";
+    }
+    auto state = stateInstance->state();
+    if (state->is<AnimationState>())
+    {
+        auto anim = state->as<AnimationState>()->animation();
+        return anim != nullptr ? anim->name() : "Animation";
+    }
+    if (state->is<EntryState>())
+    {
+        return "Entry";
+    }
+    if (state->is<ExitState>())
+    {
+        return "Exit";
+    }
+    if (state->is<AnyState>())
+    {
+        return "Any";
+    }
+    return "Blend";
+}
+#endif
+
 namespace rive
 {
 namespace
@@ -196,12 +228,24 @@ public:
 
             if (i == maxIterations)
             {
+                auto stateMachineName =
+                    m_stateMachineInstance->stateMachine() == nullptr
+                        ? "[SM Not found]"
+                        : m_stateMachineInstance->stateMachine()
+                              ->name()
+                              .c_str();
+                auto layerName = m_layer == nullptr ? "[LY Not found]"
+                                                    : m_layer->name().c_str();
+                auto artboardName =
+                    m_stateMachineInstance->artboard() == nullptr
+                        ? "[AB Not found]"
+                        : m_stateMachineInstance->artboard()->name().c_str();
                 fprintf(stderr,
                         "%s StateMachine exceeded max iterations in layer %s "
                         "on artboard %s\n",
-                        m_stateMachineInstance->stateMachine()->name().c_str(),
-                        m_layer->name().c_str(),
-                        m_stateMachineInstance->artboard()->name().c_str());
+                        stateMachineName,
+                        layerName,
+                        artboardName);
                 return false;
             }
         }
@@ -472,6 +516,15 @@ public:
             clearAnimationReset();
             changeState(transition->stateTo());
             m_stateMachineChangedOnAdvance = true;
+#ifdef RIVE_MICROPROFILE
+            RiveProfile::instance().recordTransition(
+                m_stateMachineInstance->artboard()->name(),
+                m_stateMachineInstance->name(),
+                m_layer->name(),
+                getStateName(outState),
+                getStateName(m_currentState),
+                m_stateMachineInstance->artboard());
+#endif
             // state actually has changed
             m_transition = transition;
             m_transitionDurationProperty =
@@ -1443,7 +1496,7 @@ HitResult StateMachineInstance::dragStart(Vec2D position,
     {
         disablePointerEvents(pointerId);
     }
-    auto hit = updateListeners(position, ListenerType::dragStart);
+    auto hit = updateListeners(position, ListenerType::dragStart, pointerId);
     return hit;
 }
 HitResult StateMachineInstance::dragEnd(Vec2D position,
@@ -1451,7 +1504,7 @@ HitResult StateMachineInstance::dragEnd(Vec2D position,
                                         int pointerId)
 {
     enablePointerEvents(pointerId);
-    auto hit = updateListeners(position, ListenerType::dragEnd);
+    auto hit = updateListeners(position, ListenerType::dragEnd, pointerId);
     pointerMove(position, timeStamp, pointerId);
     return hit;
 }
@@ -1900,6 +1953,11 @@ StateMachineInstance::StateMachineInstance(const StateMachine* machine,
         m_scriptedObjectsMap[scriptedOb] =
             scriptedOb->cloneScriptedObject(this);
     }
+    for (auto& scriptedPair : m_scriptedObjectsMap)
+    {
+        scriptedPair.second->dataContext(m_artboardInstance->dataContext());
+    }
+    initScriptedObjects();
     // Register Scripted objects as keyboard and text targets when expected
     for (auto object : instance->objects<ContainerComponent>())
     {
@@ -2327,6 +2385,7 @@ void StateMachineInstance::fireSemanticAction(uint32_t semanticNodeId,
 
 bool StateMachineInstance::advance(float seconds, bool newFrame)
 {
+    RIVE_PROF_SCOPE()
     if (m_drawOrderChangeCounter !=
         m_artboardInstance->drawOrderChangeCounter())
     {
@@ -2354,9 +2413,12 @@ bool StateMachineInstance::advance(float seconds, bool newFrame)
         m_needsAdvance = true;
     }
 
-    for (auto inst : m_inputInstances)
+    if (m_inputInstances.size() > 0)
     {
-        inst->advanced();
+        for (auto inst : m_inputInstances)
+        {
+            inst->advanced();
+        }
     }
     return m_needsAdvance || !m_reportedEvents.empty() ||
            !m_reportedListenerViewModels.empty();
@@ -2378,7 +2440,7 @@ void StateMachineInstance::reset()
 
 bool StateMachineInstance::advanceAndApply(float seconds)
 {
-    RIVE_PROF_SCOPE()
+    RIVE_PROF_SCOPE_L(1)
     // Advancing by 0 could return false, when it shouldn't. Force keepGoing
     // to true.
     bool keepGoing = this->advance(seconds, true) || seconds == 0.0f;
@@ -2505,7 +2567,14 @@ void StateMachineInstance::initScriptedObjects()
 {
     for (auto obj : m_scriptedObjectsMap)
     {
-        obj.second->reinit();
+        if (obj.second->scriptAsset() != nullptr)
+        {
+            if (!obj.second->userLuaInitDone())
+            {
+                obj.second->scriptAsset()->initScriptedObject(obj.second);
+            }
+            obj.second->hydrateScriptInputs();
+        }
     }
 }
 
@@ -2848,4 +2917,25 @@ BindablePropertyNumber* StateMachineInstance::findTransitionPropertyInstance(
         }
     }
     return nullptr;
+}
+
+bool StateMachineInstance::hasFocusNodes()
+{
+    auto* fm = focusManager();
+    assert(fm != nullptr);
+    return !fm->rootNodes().empty();
+}
+
+bool StateMachineInstance::focusNext()
+{
+    auto* fm = focusManager();
+    assert(fm != nullptr);
+    return fm->focusNext();
+}
+
+bool StateMachineInstance::focusPrevious()
+{
+    auto* fm = focusManager();
+    assert(fm != nullptr);
+    return fm->focusPrevious();
 }

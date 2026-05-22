@@ -3,6 +3,7 @@ import 'dart:js_interop' as js;
 import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
+import 'package:rive_native/rive_native.dart' show RenderTexture;
 import 'package:rive_native/scripting_workspace.dart';
 import 'package:rive_native/src/rive_native_web.dart';
 import 'package:rive_native/utilities.dart';
@@ -15,6 +16,7 @@ late js.JSFunction _requestImplementedType;
 late js.JSFunction _scriptingWorkspaceCompleteInsertion;
 // ignore: unused_element
 late js.JSFunction _scriptingWorkspaceRequestAutocomplete;
+late js.JSFunction _scriptingWorkspaceRequestAutocompleteWGSL;
 late js.JSFunction _scriptingWorkspaceRequestGetDefinition;
 late js.JSFunction _scriptingWorkspaceHighlightRow;
 late js.JSFunction _scriptingWorkspaceResponse;
@@ -36,6 +38,8 @@ late js.JSFunction _setScriptSourceWithType;
 late js.JSFunction _scriptingWorkspaceBuiltinDefinitions;
 late js.JSFunction _scriptingWorkspaceBuiltinDefinitionKeys;
 late js.JSFunction _scriptingWorkspaceBuiltinDefinition;
+late js.JSFunction _scriptingWorkspaceSetOreContext;
+late js.JSFunction _scriptingWorkspaceSetRenderContext;
 
 class ScriptingWorkspaceResponseResultWasm
     implements ScriptingWorkspaceResponseResult {
@@ -76,6 +80,8 @@ class ScriptingWorkspaceWasm extends ScriptingWorkspace {
         module['scriptingWorkspaceCompleteInsertion'] as js.JSFunction;
     _scriptingWorkspaceRequestAutocomplete =
         module['scriptingWorkspaceRequestAutocomplete'] as js.JSFunction;
+    _scriptingWorkspaceRequestAutocompleteWGSL =
+        module['scriptingWorkspaceRequestAutocompleteWGSL'] as js.JSFunction;
     _scriptingWorkspaceRequestGetDefinition =
         module['scriptingWorkspaceRequestGetDefinition'] as js.JSFunction;
     _setScriptSourceWithType =
@@ -116,6 +122,10 @@ class ScriptingWorkspaceWasm extends ScriptingWorkspace {
         module['scriptingWorkspaceRequestVM'] as js.JSFunction;
     _nativeFontBytes = module['nativeFontBytes'] as js.JSFunction;
     _freeNativeFont = module['_freeNativeFont'] as js.JSFunction;
+    _scriptingWorkspaceSetOreContext =
+        module['_scriptingWorkspaceSetOreContext'] as js.JSFunction;
+    _scriptingWorkspaceSetRenderContext =
+        module['_scriptingWorkspaceSetRenderContext'] as js.JSFunction;
   }
 
   static final Finalizer<int> _finalizer = Finalizer(
@@ -124,11 +134,13 @@ class ScriptingWorkspaceWasm extends ScriptingWorkspace {
   );
   int _nativePtr = 0;
 
-  ScriptingWorkspaceWasm() {
+  ScriptingWorkspaceWasm({bool canvasEnabled = false}) {
     _nativePtr =
-        (_makeScriptingWorkspace.callAsFunction(null, workReadyCallback.toJS)
-                as js.JSNumber)
-            .toDartInt;
+        (_makeScriptingWorkspace.callAsFunction(
+          null,
+          workReadyCallback.toJS,
+          canvasEnabled.toJS,
+        ) as js.JSNumber).toDartInt;
     _finalizer.attach(this, _nativePtr, detach: this);
   }
 
@@ -147,6 +159,25 @@ class ScriptingWorkspaceWasm extends ScriptingWorkspace {
   ) {
     final workId =
         (_scriptingWorkspaceRequestAutocomplete.callAsFunction(
+                  null,
+                  _nativePtr.toJS,
+                  scriptName.toJS,
+                  position.line.toJS,
+                  position.column.toJS,
+                )
+                as js.JSNumber)
+            .toDartInt;
+
+    return registerCompleter(workId);
+  }
+
+  @override
+  Future<AutocompleteResult> autocompleteWGSL(
+    String scriptName,
+    ScriptPosition position,
+  ) {
+    final workId =
+        (_scriptingWorkspaceRequestAutocompleteWGSL.callAsFunction(
                   null,
                   _nativePtr.toJS,
                   scriptName.toJS,
@@ -399,6 +430,24 @@ class ScriptingWorkspaceWasm extends ScriptingWorkspace {
   }
 
   @override
+  void setOreContext(int oreContextPointer) {
+    _scriptingWorkspaceSetOreContext.callAsFunction(
+      null,
+      _nativePtr.toJS,
+      oreContextPointer.toJS,
+    );
+  }
+
+  @override
+  void setRenderContext(int renderContextPointer) {
+    _scriptingWorkspaceSetRenderContext.callAsFunction(
+      null,
+      _nativePtr.toJS,
+      renderContextPointer.toJS,
+    );
+  }
+
+  @override
   Future<VMResult?> requestVM({int factoryPointer = 0}) {
     final workId =
         (_scriptingWorkspaceRequestVM.callAsFunction(
@@ -516,7 +565,31 @@ class ScriptingWorkspaceWasm extends ScriptingWorkspace {
   }
 }
 
-ScriptingWorkspace makeScriptingWorkspace() => ScriptingWorkspaceWasm();
+ScriptingWorkspace makeScriptingWorkspace({bool canvasEnabled = false}) =>
+    ScriptingWorkspaceWasm(canvasEnabled: canvasEnabled);
+
+/// On web, GPU scripting is now configured via [configureGPUFromRenderTextureImpl]
+/// which extracts context pointers directly from the RenderTexture. This legacy
+/// entry point returns 0; callers should use
+/// [ScriptingWorkspace.configureGPUFromRenderTexture] instead.
+int initGPUScriptingForPlatform() => 0;
+
+/// On web, extracts ore/render context pointers directly from the
+/// RenderTexture's JS renderer object, bypassing global state.
+void configureGPUFromRenderTextureImpl(
+  ScriptingWorkspace workspace,
+  RenderTexture? renderTexture,
+) {
+  if (renderTexture == null) return;
+  final oreCtxPtr = webOreCtxPtrFromRenderTexture(renderTexture);
+  final renderCtxPtr = webRenderCtxPtrFromRenderTexture(renderTexture);
+  if (oreCtxPtr != 0) {
+    workspace.setOreContext(oreCtxPtr);
+  }
+  if (renderCtxPtr != 0) {
+    workspace.setRenderContext(renderCtxPtr);
+  }
+}
 
 Uint8List getNativeFontBytes() {
   final data =

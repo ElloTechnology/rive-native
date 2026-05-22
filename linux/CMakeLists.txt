@@ -92,6 +92,7 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   luau_vm
   rust_ffi
   brotli
+  spirv_cross
   -Wl,--end-group
 )
 

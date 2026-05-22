@@ -15,6 +15,10 @@ abstract base class ProceduralPainter extends RivePainter {
   /// Called each frame to paint the artboard.
   void paint(Renderer renderer, Size size, double paintPixelRatio);
 
+  /// Called before the main RenderContext frame opens to run scripted canvas
+  /// draws in their own frame. Override in subclasses that manage an artboard.
+  void prepassCanvases() {}
+
   /// Request a repaint of the artboard.
   void scheduleRepaint() => notifyListeners();
 }
@@ -52,6 +56,11 @@ base class BasicArtboardPainter extends ArtboardPainter
     return advanced || (_artboard?.updatePass() ?? false);
   }
 
+  @override
+  void prepassCanvases() {
+    _artboard?.drawCanvases();
+  }
+
   @mustCallSuper
   @override
   void paint(Renderer renderer, Size size, double paintPixelRatio) {
@@ -66,7 +75,8 @@ base class BasicArtboardPainter extends ArtboardPainter
       artboard.bounds,
       layoutScaleFactor,
     );
-    artboard.draw(renderer);
+    artboard.advanceFrameId();
+    artboard.drawInternal(renderer);
   }
 }
 
@@ -525,6 +535,11 @@ base class ArtboardWidgetPainter<T extends ProceduralPainter>
   @override
   Color get background => const Color(
       0x00000000); // TODO (GORDON): make this an override and add to canvas implementation
+
+  @override
+  void prepassCanvases() {
+    _painter?.prepassCanvases();
+  }
 
   @override
   bool paint(RenderTexture texture, double devicePixelRatio, Size size,
@@ -1061,6 +1076,11 @@ abstract class RiveNativeRenderBox extends RiveRenderBox<RenderTexturePainter> {
     if (painter == null || !renderTexture.isReady || !hasSize) {
       return;
     }
+
+    // Canvas pre-pass: run scripted canvas draws before the main
+    // RenderContext frame opens (clear/flush), so they get their own frame.
+    painter.prepassCanvases();
+
     if (!renderTexture.clear(painter.background, painter.clear)) {
       markNeedsPaint();
       return;

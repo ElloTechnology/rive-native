@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'dart:ui' show Color;
 
 import 'package:meta/meta.dart';
+import 'package:rive_native/rive_native.dart' show RenderTexture;
 import 'package:rive_native/src/utilities/utilities.dart';
 
 import 'package:rive_native/src/ffi/scripting_workspace_ffi.dart'
@@ -726,6 +727,9 @@ class VMResult {
   /// Total time spent executing scripts (in microseconds)
   final int executeTimeUs;
 
+  /// Total time spent compiling WGSL shaders via naga (in microseconds)
+  final int wgslCompileTimeUs;
+
   /// Console output from script execution (buffered during requestVM)
   final Uint8List consoleData;
 
@@ -735,6 +739,7 @@ class VMResult {
     required this.compileTimeUs,
     required this.loadTimeUs,
     required this.executeTimeUs,
+    required this.wgslCompileTimeUs,
     required this.consoleData,
   });
 
@@ -773,6 +778,7 @@ class VMResult {
     final compileTimeUs = reader.isEOF ? 0 : reader.readVarUint();
     final loadTimeUs = reader.isEOF ? 0 : reader.readVarUint();
     final executeTimeUs = reader.isEOF ? 0 : reader.readVarUint();
+    final wgslCompileTimeUs = reader.isEOF ? 0 : reader.readVarUint();
 
     // Read console data from script execution
     Uint8List consoleData = Uint8List(0);
@@ -789,6 +795,7 @@ class VMResult {
       compileTimeUs: compileTimeUs,
       loadTimeUs: loadTimeUs,
       executeTimeUs: executeTimeUs,
+      wgslCompileTimeUs: wgslCompileTimeUs,
       consoleData: consoleData,
     );
   }
@@ -947,8 +954,16 @@ abstract class ScriptingWorkspace {
   Future<ScriptProblemResult> problemReport(String scriptName);
 
   /// Get possible autocompletion results at [position] in script with name
-  /// [scriptName].
+  /// [scriptName]. Uses the Luau frontend \u2014 see [autocompleteWGSL] for
+  /// WGSL-backed assets.
   Future<AutocompleteResult> autocomplete(
+    String scriptName,
+    ScriptPosition position,
+  );
+
+  /// Get possible autocompletion results at [position] in a WGSL source with
+  /// name [scriptName]. Uses the naga-backed WGSL frontend.
+  Future<AutocompleteResult> autocompleteWGSL(
     String scriptName,
     ScriptPosition position,
   );
@@ -982,12 +997,35 @@ abstract class ScriptingWorkspace {
   /// source has changed.
   Future<bool> checkNeedsRecompile(String scriptId);
 
+  /// Sets the ore::Context pointer on the workspace so that VMs created via
+  /// [requestVM] have access to GPU scripting. Call once after GPU init.
+  void setOreContext(int oreContextPointer);
+
+  /// Sets the gpu::RenderContext pointer on the workspace so that VMs created
+  /// via [requestVM] can allocate RenderCanvas objects. Call once after GPU
+  /// init, alongside [setOreContext].
+  void setRenderContext(int renderContextPointer);
+
   /// Request a fresh VM with all scripts compiled and registered in
   /// dependency order. Returns a [VMResult] with the VM pointer and
   /// registered module list.
   Future<VMResult?> requestVM({int factoryPointer = 0});
 
-  static ScriptingWorkspace make() => makeScriptingWorkspace();
+  static ScriptingWorkspace make({bool canvasEnabled = false}) =>
+      makeScriptingWorkspace(canvasEnabled: canvasEnabled);
+
+  /// Initialises GPU scripting for the current platform. Call once after the
+  /// native renderer is set up (i.e. after [RiveNative.init] completes).
+  /// Returns the ore::Context pointer address, or 0 on unsupported platforms.
+  /// Pass the result to [setOreContext] on every workspace you create.
+  static int initGPUScripting() => initGPUScriptingForPlatform();
+
+  /// Configures GPU contexts on this workspace from a [RenderTexture].
+  /// On web, extracts ore/render context pointers directly from the texture's
+  /// JS renderer object, avoiding global state. On native (FFI), delegates to
+  /// [initGPUScripting] + [setOreContext] + [setRenderContext] as before.
+  void configureGPUFromRenderTexture(RenderTexture? renderTexture) =>
+      configureGPUFromRenderTextureImpl(this, renderTexture);
 
   static Uint8List nativeFontBytes() => getNativeFontBytes();
 

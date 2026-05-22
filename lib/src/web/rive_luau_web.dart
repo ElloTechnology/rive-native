@@ -22,6 +22,7 @@ late js.JSFunction _riveLuaUnregisterModule;
 late js.JSFunction _riveLuaRegisterScript;
 late js.JSFunction _riveLuaSetField;
 late js.JSFunction _riveLuaGetField;
+late js.JSFunction _riveLuaRawGetField;
 late js.JSFunction _riveLuaToNumber;
 late js.JSFunction _riveLuaToInteger;
 late js.JSFunction _riveLuaToBoolean;
@@ -103,8 +104,21 @@ late js.JSFunction _riveLuaGetGeneratorRef;
 late js.JSFunction _riveLuaClearGeneratorRefs;
 late js.JSFunction _riveLuaPushBlob;
 late js.JSFunction _riveLuaPushAudioSource;
+late js.JSFunction _riveLuaEnableDrawCanvasPhase;
+late js.JSFunction _riveLuaDisableDrawCanvasPhase;
+late js.JSFunction _riveLuaPushShader;
+late js.JSFunction _riveLuaPushGPUFeatures;
+late js.JSFunction _riveLuaPushPreferredCanvasFormat;
+late js.JSFunction _riveLuaPushCanvas;
+late js.JSFunction _riveLuaPushGPUCanvas;
+late js.JSFunction _riveLuaContextBeginRenderPass;
+late js.JSFunction _riveGPUBeginFrame;
+late js.JSFunction _riveGPUEndFrame;
 late js.JSFunction _riveLuaStopPlayback;
 late js.JSFunction _riveLuaStartPlayback;
+late js.JSFunction _riveLuaDecodeImage;
+late js.JSFunction _riveLuaPollAsyncWork;
+late js.JSFunction _riveLuaHasPendingAsyncWork;
 
 bool _wasmBool(js.JSAny? value) => (value as js.JSNumber).toDartInt == 1;
 
@@ -123,6 +137,7 @@ class LuauStateWasm extends LuauState {
     _riveLuaRegisterScript = module['_riveLuaRegisterScript'] as js.JSFunction;
     _riveLuaSetField = module['_lua_setfield'] as js.JSFunction;
     _riveLuaGetField = module['_lua_getfield'] as js.JSFunction;
+    _riveLuaRawGetField = module['_lua_rawgetfield'] as js.JSFunction;
     _riveLuaToNumber = module['_lua_tonumberx'] as js.JSFunction;
     _riveLuaToInteger = module['_lua_tointegerx'] as js.JSFunction;
     _riveLuaToBoolean = module['_lua_toboolean'] as js.JSFunction;
@@ -212,7 +227,8 @@ class LuauStateWasm extends LuauState {
     _riveLuaPushReportedEventListenerInvocation =
         module['_riveLuaPushReportedEventListenerInvocation'] as js.JSFunction;
     _riveLuaPushViewModelChangeListenerInvocation =
-        module['_riveLuaPushViewModelChangeListenerInvocation'] as js.JSFunction;
+        module['_riveLuaPushViewModelChangeListenerInvocation']
+            as js.JSFunction;
     _riveLuaPushNoneListenerInvocation =
         module['_riveLuaPushNoneListenerInvocation'] as js.JSFunction;
     _riveLuaPushGamepadListenerInvocation =
@@ -238,8 +254,27 @@ class LuauStateWasm extends LuauState {
     _riveLuaPushBlob = module['_riveLuaPushBlob'] as js.JSFunction;
     _riveLuaPushAudioSource =
         module['_riveLuaPushAudioSource'] as js.JSFunction;
+    _riveLuaEnableDrawCanvasPhase =
+        module['_riveLuaEnableDrawCanvasPhase'] as js.JSFunction;
+    _riveLuaDisableDrawCanvasPhase =
+        module['_riveLuaDisableDrawCanvasPhase'] as js.JSFunction;
+    _riveLuaPushShader = module['_riveLuaPushShader'] as js.JSFunction;
+    _riveLuaPushGPUFeatures =
+        module['_riveLuaPushGPUFeatures'] as js.JSFunction;
+    _riveLuaPushPreferredCanvasFormat =
+        module['_riveLuaPushPreferredCanvasFormat'] as js.JSFunction;
+    _riveLuaPushCanvas = module['riveLuaPushCanvas'] as js.JSFunction;
+    _riveLuaPushGPUCanvas = module['riveLuaPushGPUCanvas'] as js.JSFunction;
+    _riveLuaContextBeginRenderPass =
+        module['riveLuaContextBeginRenderPass'] as js.JSFunction;
+    _riveGPUBeginFrame = module['riveGPUBeginFrame'] as js.JSFunction;
+    _riveGPUEndFrame = module['riveGPUEndFrame'] as js.JSFunction;
     _riveLuaStopPlayback = module['_riveLuaStopPlayback'] as js.JSFunction;
     _riveLuaStartPlayback = module['_riveLuaStartPlayback'] as js.JSFunction;
+    _riveLuaDecodeImage = module['_riveLuaDecodeImage'] as js.JSFunction;
+    _riveLuaPollAsyncWork = module['_riveLuaPollAsyncWork'] as js.JSFunction;
+    _riveLuaHasPendingAsyncWork =
+        module['_riveLuaHasPendingAsyncWork'] as js.JSFunction;
   }
 
   /// The ScriptingVM pointer (used for VM lifecycle and File association).
@@ -274,14 +309,21 @@ class LuauStateWasm extends LuauState {
 
   /// Adopt a ScriptingVM created by ScriptingWorkspace.
   /// Replaces the CPPRuntimeScriptingContext with a DartExposedScriptingContext.
-  LuauStateWasm.adoptVM(int vmPointer, WebFactory riveFactory) {
+  /// [renderTexture] provides the WebGL context handle for this VM's renderer.
+  LuauStateWasm.adoptVM(
+    int vmPointer,
+    WebFactory riveFactory, {
+    RenderTexture? renderTexture,
+  }) {
     _vmPtr = vmPointer.toJS;
+    final glHandle = webGLHandleFromRenderTexture(renderTexture);
     // Replace the context with a DartExposedScriptingContext.
     _riveVMAdopt.callAsFunction(
       null,
       _vmPtr,
       riveFactory.pointer,
       notifyConsoleHasData.toJS,
+      glHandle.toJS,
     );
     // Get the lua_State pointer for Lua operations.
     _nativePtr = _riveVMGetState.callAsFunction(null, _vmPtr) as js.JSAny;
@@ -358,6 +400,19 @@ class LuauStateWasm extends LuauState {
   LuauType getField(int index, String name) =>
       RiveWasm.toNativeString(name, (namePointer) {
         final type = (_riveLuaGetField.callAsFunction(
+          null,
+          _nativePtr,
+          index.toJS,
+          namePointer,
+        ) as js.JSNumber)
+            .toDartInt;
+        return LuauType.values[type];
+      });
+
+  @override
+  LuauType rawGetField(int index, String name) =>
+      RiveWasm.toNativeString(name, (namePointer) {
+        final type = (_riveLuaRawGetField.callAsFunction(
           null,
           _nativePtr,
           index.toJS,
@@ -475,6 +530,10 @@ class LuauStateWasm extends LuauState {
   final List<LuauFunction> _registeredFunctions = [];
   static final HashMap<int, LuauStateWasm> _states =
       HashMap<int, LuauStateWasm>();
+
+  /// Look up an existing LuauStateWasm by its native pointer.
+  /// Returns null if no state is registered for the given pointer.
+  static LuauStateWasm? fromNativePointer(int ptr) => _states[ptr];
 
   @override
   int pushViewModel(InternalDataContext dataContext) {
@@ -797,8 +856,8 @@ class LuauStateWasm extends LuauState {
   }
 
   @override
-  void pushKeyboardListenerInvocation(int key, int modifiers, bool isPressed,
-      bool isRepeat) {
+  void pushKeyboardListenerInvocation(
+      int key, int modifiers, bool isPressed, bool isRepeat) {
     _riveLuaPushKeyboardListenerInvocation.callAsFunctionEx(
       null,
       _nativePtr,
@@ -810,8 +869,8 @@ class LuauStateWasm extends LuauState {
   }
 
   @override
-  void pushScriptedKeyboardInvocation(int key, int modifiers, bool isPressed,
-      bool isRepeat) {
+  void pushScriptedKeyboardInvocation(
+      int key, int modifiers, bool isPressed, bool isRepeat) {
     _riveLuaPushScriptedKeyboardInvocation.callAsFunctionEx(
       null,
       _nativePtr,
@@ -946,6 +1005,37 @@ class LuauStateWasm extends LuauState {
   }
 
   @override
+  int pushCanvas(int width, int height) {
+    return (_riveLuaPushCanvas.callAsFunction(
+            null, _nativePtr, width.toJS, height.toJS) as js.JSNumber)
+        .toDartInt;
+  }
+
+  @override
+  int pushGPUCanvas(int width, int height) {
+    return (_riveLuaPushGPUCanvas.callAsFunction(
+            null, _nativePtr, width.toJS, height.toJS) as js.JSNumber)
+        .toDartInt;
+  }
+
+  @override
+  int contextBeginRenderPass() {
+    return (_riveLuaContextBeginRenderPass.callAsFunction(null, _nativePtr)
+            as js.JSNumber)
+        .toDartInt;
+  }
+
+  @override
+  void gpuBeginFrame() {
+    _riveGPUBeginFrame.callAsFunction(null, _nativePtr);
+  }
+
+  @override
+  void gpuEndFrame() {
+    _riveGPUEndFrame.callAsFunction(null, _nativePtr);
+  }
+
+  @override
   RenderPath? renderPath(ScriptedPath scriptedPath, RenderPath path) {
     final riveFactory = (path as WebRenderPath).riveFactory;
     final renderPathPointer = (_riveLuaRenderPath.callAsFunction(
@@ -1010,6 +1100,56 @@ class LuauStateWasm extends LuauState {
   }
 
   @override
+  void enableDrawCanvasPhase() {
+    _riveLuaEnableDrawCanvasPhase.callAsFunction(null, _nativePtr);
+  }
+
+  @override
+  void disableDrawCanvasPhase() {
+    _riveLuaDisableDrawCanvasPhase.callAsFunction(null, _nativePtr);
+  }
+
+  @override
+  int pushShader(String name) {
+    return RiveWasm.toNativeString(name, (namePointer) {
+      return (_riveLuaPushShader.callAsFunction(null, _nativePtr, namePointer)
+              as js.JSNumber)
+          .toDartInt;
+    });
+  }
+
+  @override
+  int pushGPUFeatures() {
+    return (_riveLuaPushGPUFeatures.callAsFunction(null, _nativePtr)
+            as js.JSNumber)
+        .toDartInt;
+  }
+
+  @override
+  int pushPreferredCanvasFormat() {
+    return (_riveLuaPushPreferredCanvasFormat.callAsFunction(null, _nativePtr)
+            as js.JSNumber)
+        .toDartInt;
+  }
+
+  @override
+  int decodeImage() {
+    return (_riveLuaDecodeImage.callAsFunction(null, _nativePtr) as js.JSNumber)
+        .toDartInt;
+  }
+
+  @override
+  int pollAsyncWork({int maxCallbacks = 16}) {
+    return (_riveLuaPollAsyncWork.callAsFunction(
+            null, _nativePtr, maxCallbacks.toJS) as js.JSNumber)
+        .toDartInt;
+  }
+
+  @override
+  bool get hasPendingAsyncWork =>
+      _wasmBool(_riveLuaHasPendingAsyncWork.callAsFunction(null, _nativePtr));
+
+  @override
   void stopPlayback() {
     _riveLuaStopPlayback.callAsFunction(null, _nativePtr);
   }
@@ -1034,8 +1174,17 @@ LuauState makeLuauState(Factory riveFactory) =>
     LuauStateWasm(riveFactory as WebFactory);
 
 /// Adopts a ScriptingVM created by ScriptingWorkspace.
-LuauState adoptLuauState(int vmPointer, Factory riveFactory) =>
-    LuauStateWasm.adoptVM(vmPointer, riveFactory as WebFactory);
+/// On web, [renderTexture] provides the GL context handle for this VM.
+LuauState adoptLuauState(
+  int vmPointer,
+  Factory riveFactory, {
+  RenderTexture? renderTexture,
+}) =>
+    LuauStateWasm.adoptVM(
+      vmPointer,
+      riveFactory as WebFactory,
+      renderTexture: renderTexture,
+    );
 
 class PointerEventWeb extends PointerEvent {
   final js.JSAny pointer;

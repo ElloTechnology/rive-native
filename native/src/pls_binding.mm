@@ -7,7 +7,27 @@
 #include "rive/renderer/rive_render_factory.hpp"
 #include "rive/shapes/paint/color.hpp"
 #include "rive/core/binary_reader.hpp"
+#include <mutex>
 #include <unordered_map>
+#include <stdio.h>
+
+// Compile-time diagnostics — will appear as warnings during build.
+#ifdef RIVE_CANVAS
+#pragma message("[rive diag] RIVE_CANVAS is defined")
+#else
+#pragma message("[rive diag] RIVE_CANVAS is NOT defined")
+#endif
+#ifdef WITH_RIVE_SCRIPTING
+#pragma message("[rive diag] WITH_RIVE_SCRIPTING is defined")
+#else
+#pragma message("[rive diag] WITH_RIVE_SCRIPTING is NOT defined")
+#endif
+
+#if defined(RIVE_CANVAS) && defined(WITH_RIVE_SCRIPTING)
+// Defined in rive_luau_binding_metal.mm (compiled for all macOS/iOS builds).
+extern "C" void* riveInitGPUScriptingMetal(void* renderContextPtr,
+                                           void* queueBridged);
+#endif
 
 /// Calls from the Flutter plugin come in on a different thread so we use a
 /// mutex to ensure we're destroying/creating rive renderers without
@@ -50,6 +70,9 @@ public:
         auto renderCtxImpl =
             m_renderContext->actual
                 ->static_impl_cast<rive::gpu::RenderContextMetalImpl>();
+        // Provide the command queue so ScriptedCanvas can create its own
+        // command buffers for canvas flush cycles.
+        renderCtxImpl->setCommandQueue(queueARC);
         m_renderTarget[0] = renderCtxImpl->makeRenderTarget(
             MTLPixelFormatBGRA8Unorm, width, height);
         m_renderTarget[0]->setTargetTexture(texture0ARC);

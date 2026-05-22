@@ -59,6 +59,50 @@ final void Function(
                 )>>('riveVMAdopt')
         .asFunction();
 
+final Pointer<Void> Function(
+  Pointer<Void> renderContext,
+  Pointer<Void> queue,
+) _riveInitGPUScriptingMetal = _nativeLib
+    .lookup<
+        NativeFunction<
+            Pointer<Void> Function(
+                Pointer<Void>, Pointer<Void>)>>('riveInitGPUScriptingMetal')
+    .asFunction();
+
+/// Initialises GPU scripting support on Metal (macOS / iOS).
+/// Returns the ore::Context pointer — pass to [scriptingWorkspaceSetOreContext]
+/// before calling [requestVM].
+Pointer<Void> initGPUScriptingMetal(
+    Pointer<Void> renderContext, Pointer<Void> queue) {
+  return _riveInitGPUScriptingMetal(renderContext, queue);
+}
+
+final Pointer<Void> Function(Pointer<Void> renderContext)
+    _riveInitGPUScriptingD3D11 = _nativeLib
+        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>)>>(
+            'riveInitGPUScriptingD3D11')
+        .asFunction();
+
+/// Initialises GPU scripting support on Windows (D3D11).
+/// Returns the ore::Context pointer — pass to [scriptingWorkspaceSetOreContext]
+/// before calling [requestVM].
+Pointer<Void> initGPUScriptingD3D11(Pointer<Void> renderContext) {
+  return _riveInitGPUScriptingD3D11(renderContext);
+}
+
+final Pointer<Void> Function(Pointer<Void> renderContext)
+    _riveInitGPUScriptingGL = _nativeLib
+        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>)>>(
+            'riveInitGPUScriptingGL')
+        .asFunction();
+
+/// Initialises GPU scripting support on GL platforms (web / Android / Linux).
+/// Returns the ore::Context pointer — pass to [scriptingWorkspaceSetOreContext]
+/// before calling [requestVM].
+Pointer<Void> initGPUScriptingGL(Pointer<Void> renderContext) {
+  return _riveInitGPUScriptingGL(renderContext);
+}
+
 final void Function(
   Pointer<Void> state,
   Pointer<Utf8> scriptName,
@@ -180,6 +224,14 @@ final int Function(Pointer<Void> state, int idx, Pointer<Utf8> name)
             NativeFunction<
                 Int32 Function(
                     Pointer<Void>, Int32, Pointer<Utf8>)>>('lua_getfield')
+        .asFunction();
+
+final int Function(Pointer<Void> state, int idx, Pointer<Utf8> name)
+    _riveLuaRawGetField = _nativeLib
+        .lookup<
+            NativeFunction<
+                Int32 Function(
+                    Pointer<Void>, Int32, Pointer<Utf8>)>>('lua_rawgetfield')
         .asFunction();
 
 final double Function(Pointer<Void> state, int idx, Pointer<Int32> isnum)
@@ -517,8 +569,7 @@ final Pointer<Void> Function(Pointer<Void> state, Pointer<Utf8> text)
     _riveLuaPushTextInputListenerInvocation = _nativeLib
         .lookup<
             NativeFunction<
-                Pointer<Void> Function(
-                    Pointer<Void>, Pointer<Utf8>)>>(
+                Pointer<Void> Function(Pointer<Void>, Pointer<Utf8>)>>(
           'riveLuaPushTextInputListenerInvocation',
         )
         .asFunction();
@@ -527,8 +578,7 @@ final Pointer<Void> Function(Pointer<Void> state, Pointer<Utf8> text)
     _riveLuaPushScriptedTextInputInvocation = _nativeLib
         .lookup<
             NativeFunction<
-                Pointer<Void> Function(
-                    Pointer<Void>, Pointer<Utf8>)>>(
+                Pointer<Void> Function(Pointer<Void>, Pointer<Utf8>)>>(
           'riveLuaPushScriptedTextInputInvocation',
         )
         .asFunction();
@@ -566,8 +616,7 @@ final Pointer<Void> Function(
     _riveLuaPushGamepadListenerInvocation = _nativeLib
         .lookup<
             NativeFunction<
-                Pointer<Void> Function(
-                    Pointer<Void>, Int32, Uint64, Float)>>(
+                Pointer<Void> Function(Pointer<Void>, Int32, Uint64, Float)>>(
           'riveLuaPushGamepadListenerInvocation',
         )
         .asFunction();
@@ -670,6 +719,42 @@ final int Function(Pointer<Void> state, Pointer<Void> renderImage)
         )
         .asFunction();
 
+// Creates a (non-GPU) Canvas and pushes it onto the Lua stack.
+// Returns 1 on success (pushes handle or nil).
+final int Function(Pointer<Void> state, int width, int height)
+    _riveLuaPushCanvas = _nativeLib
+        .lookup<NativeFunction<Int32 Function(Pointer<Void>, Uint32, Uint32)>>(
+          'riveLuaPushCanvas',
+        )
+        .asFunction();
+
+// Creates a GPUCanvas and pushes it onto the Lua stack.
+// Returns 1 on success (pushes handle or nil).
+final int Function(Pointer<Void> state, int width, int height)
+    _riveLuaPushGPUCanvas = _nativeLib
+        .lookup<NativeFunction<Int32 Function(Pointer<Void>, Uint32, Uint32)>>(
+          'riveLuaPushGPUCanvas',
+        )
+        .asFunction();
+
+// context:beginRenderPass(desc) — reads the descriptor from stack[2] and
+// pushes a ScriptedGPURenderPass on success.
+final int Function(Pointer<Void> state) _riveLuaContextBeginRenderPass =
+    _nativeLib
+        .lookup<NativeFunction<Int32 Function(Pointer<Void>)>>(
+          'riveLuaContextBeginRenderPass',
+        )
+        .asFunction();
+
+// Begins / ends a GPU frame for scripted GPU canvas draw calls.
+final void Function(Pointer<Void>) _riveGPUBeginFrame = _nativeLib
+    .lookup<NativeFunction<Void Function(Pointer<Void>)>>('riveGPUBeginFrame')
+    .asFunction();
+
+final void Function(Pointer<Void>) _riveGPUEndFrame = _nativeLib
+    .lookup<NativeFunction<Void Function(Pointer<Void>)>>('riveGPUEndFrame')
+    .asFunction();
+
 final void Function(
         Pointer<Void> state, Pointer<Utf8> name, Pointer<Uint8> data, int size)
     _riveLuaPushBlob = _nativeLib
@@ -691,6 +776,73 @@ final int Function(Pointer<Void> state, Pointer<Void> audioSource)
                   Pointer<Void>,
                   Pointer<Void>,
                 )>>('riveLuaPushAudioSource')
+        .asFunction();
+
+final void Function(Pointer<Void> state) _riveLuaEnableDrawCanvasPhase =
+    _nativeLib
+        .lookup<
+            NativeFunction<
+                Void Function(
+                  Pointer<Void>,
+                )>>('riveLuaEnableDrawCanvasPhase')
+        .asFunction();
+
+final void Function(Pointer<Void> state) _riveLuaDisableDrawCanvasPhase =
+    _nativeLib
+        .lookup<
+            NativeFunction<
+                Void Function(
+                  Pointer<Void>,
+                )>>('riveLuaDisableDrawCanvasPhase')
+        .asFunction();
+
+// Compiles a shader from the in-memory RSTB registry and pushes it as a
+// ScriptedShader userdata. Returns 1 on success, 0 if not found.
+final int Function(Pointer<Void> state, Pointer<Utf8> name) _riveLuaPushShader =
+    _nativeLib
+        .lookup<NativeFunction<Int32 Function(Pointer<Void>, Pointer<Utf8>)>>(
+          'riveLuaPushShader',
+        )
+        .asFunction();
+
+// Pushes a GPU features table onto the Lua stack. Queries the ORE context
+// when available, otherwise returns conservative defaults. Always returns 1.
+final int Function(Pointer<Void> state) _riveLuaPushGPUFeatures = _nativeLib
+    .lookup<NativeFunction<Int32 Function(Pointer<Void>)>>(
+      'riveLuaPushGPUFeatures',
+    )
+    .asFunction();
+
+// Pushes the platform's preferred canvas color format string onto the Lua
+// stack. Always returns 1.
+final int Function(Pointer<Void> state) _riveLuaPushPreferredCanvasFormat =
+    _nativeLib
+        .lookup<NativeFunction<Int32 Function(Pointer<Void>)>>(
+          'riveLuaPushPreferredCanvasFormat',
+        )
+        .asFunction();
+
+// Forwards to context_decodeImage_impl. Reads the buffer from Lua stack
+// position 2 and returns a Promise. Returns 1 (promise pushed) or 0.
+final int Function(Pointer<Void> state) _riveLuaDecodeImage = _nativeLib
+    .lookup<NativeFunction<Int32 Function(Pointer<Void>)>>(
+      'riveLuaDecodeImage',
+    )
+    .asFunction();
+
+// Poll for completed async tasks (image decodes, etc.) and invoke callbacks.
+final int Function(Pointer<Void> state, int maxCallbacks)
+    _riveLuaPollAsyncWork = _nativeLib
+        .lookup<NativeFunction<Uint32 Function(Pointer<Void>, Uint32)>>(
+            'riveLuaPollAsyncWork')
+        .asFunction();
+
+// Check if there are any pending async tasks.
+final bool Function(Pointer<Void> state) _riveLuaHasPendingAsyncWork =
+    _nativeLib
+        .lookup<NativeFunction<Bool Function(Pointer<Void>)>>(
+          'riveLuaHasPendingAsyncWork',
+        )
         .asFunction();
 
 final void Function(Pointer<Void> state) _riveLuaStopPlayback = _nativeLib
@@ -903,8 +1055,21 @@ class LuauStateFFI extends LuauState implements RiveFFIReference {
 
   @override
   void pushFunction(LuauFunction t, {String debugName = 'unknown'}) {
+    // Capture the receiving wrapper so every Lua→Dart dispatch reuses it
+    // instead of minting a fresh `LuauStateFFI(pointer)` per call. The
+    // original implementation allocated a new wrapper (plus its empty
+    // `_nativeCallables` list and closure cell) on every callback; under hot
+    // script-update loops that turns into multi-MB/sec of Dart heap pressure,
+    // which the VM-side GC reclaims but the OS doesn't claw back, producing
+    // a one-way RSS climb. The lua_State* Luau passes to the trampoline is
+    // the calling thread's state; for non-coroutine callbacks (the only kind
+    // currently invoked through this path) it equals `_statePtr`, so reusing
+    // `this` is correct. If a coroutine ever calls back, the captured
+    // wrapper would still operate on the registry-shared state and the
+    // semantic stack would be wrong — that's not a path we exercise today.
+    final self = this;
     final ff = NativeCallable<LuaCFunction>.isolateLocal(
-      (Pointer<Void> pointer) => t.call(LuauStateFFI(pointer)),
+      (Pointer<Void> _) => t.call(self),
       exceptionalReturn: 0,
     );
     _nativeCallables.add(ff);
@@ -946,6 +1111,12 @@ class LuauStateFFI extends LuauState implements RiveFFIReference {
   @override
   LuauType getField(int index, String name) {
     final type = _riveLuaGetField(_statePtr, index, toNativeString(name));
+    return LuauType.values[type];
+  }
+
+  @override
+  LuauType rawGetField(int index, String name) {
+    final type = _riveLuaRawGetField(_statePtr, index, toNativeString(name));
     return LuauType.values[type];
   }
 
@@ -1143,8 +1314,8 @@ class LuauStateFFI extends LuauState implements RiveFFIReference {
   }
 
   @override
-  void pushKeyboardListenerInvocation(int key, int modifiers, bool isPressed,
-      bool isRepeat) {
+  void pushKeyboardListenerInvocation(
+      int key, int modifiers, bool isPressed, bool isRepeat) {
     _riveLuaPushKeyboardListenerInvocation(
       _statePtr,
       key,
@@ -1155,8 +1326,8 @@ class LuauStateFFI extends LuauState implements RiveFFIReference {
   }
 
   @override
-  void pushScriptedKeyboardInvocation(int key, int modifiers, bool isPressed,
-      bool isRepeat) {
+  void pushScriptedKeyboardInvocation(
+      int key, int modifiers, bool isPressed, bool isRepeat) {
     _riveLuaPushScriptedKeyboardInvocation(
       _statePtr,
       key,
@@ -1282,6 +1453,25 @@ class LuauStateFFI extends LuauState implements RiveFFIReference {
   }
 
   @override
+  int pushCanvas(int width, int height) {
+    return _riveLuaPushCanvas(_statePtr, width, height);
+  }
+
+  @override
+  int pushGPUCanvas(int width, int height) {
+    return _riveLuaPushGPUCanvas(_statePtr, width, height);
+  }
+
+  @override
+  int contextBeginRenderPass() => _riveLuaContextBeginRenderPass(_statePtr);
+
+  @override
+  void gpuBeginFrame() => _riveGPUBeginFrame(_statePtr);
+
+  @override
+  void gpuEndFrame() => _riveGPUEndFrame(_statePtr);
+
+  @override
   RenderPath? renderPath(ScriptedPath scriptedPath, RenderPath path) {
     final riveFactory = (path as rive_renderer.FFIRenderPath).riveFactory;
     final renderPathPointer = _riveLuaRenderPath(
@@ -1327,6 +1517,45 @@ class LuauStateFFI extends LuauState implements RiveFFIReference {
     return _riveLuaPushAudioSource(
         _statePtr, (audioSource as AudioSourceFFI).nativePtr);
   }
+
+  @override
+  void enableDrawCanvasPhase() {
+    _riveLuaEnableDrawCanvasPhase(_statePtr);
+  }
+
+  @override
+  void disableDrawCanvasPhase() {
+    _riveLuaDisableDrawCanvasPhase(_statePtr);
+  }
+
+  @override
+  int pushShader(String name) {
+    final nativeName = toNativeString(name);
+    return _riveLuaPushShader(_statePtr, nativeName);
+  }
+
+  @override
+  int pushGPUFeatures() {
+    return _riveLuaPushGPUFeatures(_statePtr);
+  }
+
+  @override
+  int pushPreferredCanvasFormat() {
+    return _riveLuaPushPreferredCanvasFormat(_statePtr);
+  }
+
+  @override
+  int decodeImage() {
+    return _riveLuaDecodeImage(_statePtr);
+  }
+
+  @override
+  int pollAsyncWork({int maxCallbacks = 16}) {
+    return _riveLuaPollAsyncWork(_statePtr, maxCallbacks);
+  }
+
+  @override
+  bool get hasPendingAsyncWork => _riveLuaHasPendingAsyncWork(_statePtr);
 
   @override
   void stopPlayback() {
@@ -1421,7 +1650,12 @@ LuauState makeLuauState(Factory riveFactory) =>
     LuauStateFFI.fromFactory(riveFactory);
 
 /// Adopts a ScriptingVM created by ScriptingWorkspace.
-LuauState adoptLuauState(int vmPointer, Factory riveFactory) =>
+/// [renderTexture] is unused on FFI (native GL context is process-global).
+LuauState adoptLuauState(
+  int vmPointer,
+  Factory riveFactory, {
+  RenderTexture? renderTexture,
+}) =>
     LuauStateFFI.adoptVM(
       Pointer<Void>.fromAddress(vmPointer),
       riveFactory,

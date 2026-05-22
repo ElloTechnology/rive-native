@@ -3,12 +3,21 @@
 #include "lua.h"
 #include "lualib.h"
 #include "rive/lua/rive_lua_libs.hpp"
+#include "rive/async/work_pool.hpp"
 #include "rive/renderer.hpp"
 #include "rive/viewmodel/viewmodel_instance_viewmodel.hpp"
 #include "rive/core/binary_writer.hpp"
 #include "rive/core/vector_binary_stream.hpp"
 #include "rive/assets/blob_asset.hpp"
 #include "luau_error_parser.hpp"
+#ifdef RIVE_CANVAS
+#include "rive/renderer/render_context.hpp"
+// ore_context.hpp is NOT included here because on Apple platforms it would
+// #import <Metal/Metal.h>, which is invalid in a .cpp file.
+// riveInitGPUScriptingGL includes the header itself on non-Apple GL platforms
+// where the ObjC import is not triggered.
+#include <optional>
+#endif
 
 const rive::RawPath& renderPathToRawPath(rive::Factory* factory,
                                          rive::RenderPath* renderPath);
@@ -28,6 +37,13 @@ const rive::RawPath& renderPathToRawPath(rive::Factory* factory,
 using namespace rive;
 
 #ifdef __EMSCRIPTEN__
+// Forward-declare GPU scripting functions from lua_gpu.cpp and
+// webgl_factory.cpp. Both translation units are linked into the same WASM
+// module.
+extern "C" void riveGPUBeginFrame(lua_State* L);
+extern "C" void riveGPUEndFrame(lua_State* L);
+extern "C" void riveInvalidateGLState(uintptr_t renderContextPtr);
+
 using namespace emscripten;
 using ExternalPointer = WasmPtr;
 using VoidCallback = emscripten::val;
@@ -37,21 +53,6 @@ typedef void (*VoidCallback)();
 #endif
 
 static int riveErrorHandler(lua_State* L);
-static void* l_alloc(void* ud, void* ptr, size_t osize, size_t nsize)
-{
-    (void)ud;
-    (void)osize;
-    if (nsize == 0)
-    {
-        free(ptr);
-        return NULL;
-    }
-    else
-    {
-        return realloc(ptr, nsize);
-    }
-}
-
 static void interrupt(lua_State* L, int gc);
 
 class DartExposedScriptingContext : public ScriptingContext
@@ -73,13 +74,44 @@ public:
     {
         // calculate stack position for message handler
         int hpos = lua_gettop(state) - nargs;
-        lua_pushcfunction(state, riveErrorHandler, "riveErrorHandler");
+        // Push the error handler from a cached registry ref instead of minting
+        // a fresh CClosure every pcall. The handler is registered lazily on the
+        // first call and lives for the lua_State's lifetime; lua_close tears
+        // the registry down for us when the VM is destroyed.
+        //
+        if (m_errorHandlerRef == LUA_NOREF)
+        {
+            lua_pushcfunction(state, riveErrorHandler, "riveErrorHandler");
+            m_errorHandlerRef = lua_ref(state, -1);
+            lua_pop(state, 1);
+        }
+        lua_getref(state, m_errorHandlerRef);
         lua_insert(state, hpos);
 
-        startTimedExecution(state);
+#ifdef __EMSCRIPTEN__
+        // Ensure we're in the correct WebGL context before executing any Lua
+        // code. This covers both the Dart-exported riveLuaPCall path (which
+        // already switches, making this a no-op) and C++ internal
+        // rive_lua_pcall calls (e.g. scriptInit, scriptAdvance) that bypass
+        // the Dart wrapper.
+        int vmGL = this->glHandle();
+        int prevGL = vmGL ? emscripten_webgl_get_current_context() : 0;
+        if (vmGL && vmGL != prevGL)
+        {
+            emscripten_webgl_make_context_current(vmGL);
+        }
+#endif
+
+        // startTimedExecution(state);
         int ret = lua_pcall(state, nargs, nresults, hpos);
-        endTimedExecution(state);
+        // endTimedExecution(state);
         lua_remove(state, hpos);
+
+#ifdef __EMSCRIPTEN__
+        if (vmGL && vmGL != prevGL)
+            emscripten_webgl_make_context_current(prevGL);
+#endif
+
         return ret;
     }
 
@@ -172,6 +204,9 @@ public:
 private:
     VoidCallback m_consoleHasDataCallback;
     bool m_calledConsoleCallback = false;
+    // Lua registry ref to a cached riveErrorHandler CClosure. Populated on the
+    // first pCall and reused for the lua_State's lifetime. See pCall() above.
+    int m_errorHandlerRef = LUA_NOREF;
 };
 
 static void interrupt(lua_State* L, int gc)
@@ -390,9 +425,15 @@ EXPORT void riveVMUnregisterModule(ExternalPointer vmPtr, const char* name)
 
 // Adopts a ScriptingVM from ScriptingWorkspace, replacing its context with
 // a DartExposedScriptingContext. The old context is properly cleaned up.
+// On emscripten, glHandle is the WebGL context handle for this VM's renderer.
 EXPORT void riveVMAdopt(ExternalPointer vmPtr,
                         ExternalPointer factory,
-                        VoidCallback consoleHasDataCallback)
+                        VoidCallback consoleHasDataCallback
+#ifdef __EMSCRIPTEN__
+                        ,
+                        int glHandle
+#endif
+)
 {
     if (!vmPtr)
     {
@@ -406,8 +447,65 @@ EXPORT void riveVMAdopt(ExternalPointer vmPtr,
     auto newContext =
         std::make_unique<DartExposedScriptingContext>((Factory*)factory,
                                                       consoleHasDataCallback);
+
+#ifdef WITH_RIVE_TOOLS
+    // Transfer compiled WGSL→RSTB blobs, ore context, and render context from
+    // the old context before it is destroyed by replaceContext. Without this,
+    // loadShader() / context:gpuCanvas() would find an empty map and null
+    // contexts in the new DartExposedScriptingContext.
+    if (auto* oldCtx = vm->context())
+    {
+        auto rstbs = oldCtx->takeShaderRstbs();
+        for (auto& kv : rstbs)
+        {
+            newContext->registerShaderRstb(kv.first, std::move(kv.second));
+        }
+        newContext->setOreContext(oldCtx->oreContext());
+        newContext->setRenderContext(oldCtx->renderContext());
+    }
+#endif
+#ifdef __EMSCRIPTEN__
+    newContext->setGLHandle(glHandle);
+#endif
+
     vm->replaceContext(std::move(newContext));
 }
+
+#ifdef RIVE_CANVAS
+// On Apple platforms ORE_BACKEND_GL may be defined (macOS uses both Metal
+// and GL via ANGLE), but the GPU-scripting entry point on Apple is
+// riveInitGPUScriptingMetal in rive_luau_binding_metal.mm. Exclude GL init
+// here so Apple uses the Metal path exclusively.
+#if defined(ORE_BACKEND_GL) && !defined(__APPLE__)
+#include "rive/renderer/ore/ore_context_gl.hpp"
+// Process-lifetime ore::Context for GL builds (web / Android / Linux).
+// Used only on non-web platforms where there's a single GL context.
+static std::unique_ptr<rive::ore::Context> g_ownedOreContextGL;
+
+// Called at editor startup on GL platforms (non-web). Idempotent — safe to
+// call multiple times; returns the same context pointer after initialization.
+// On web, the WebGL2Renderer owns the ore::Context instead.
+EXPORT ExternalPointer
+riveInitGPUScriptingGL(ExternalPointer /*renderContextPtr*/)
+{
+    if (!g_ownedOreContextGL)
+    {
+        g_ownedOreContextGL = rive::ore::ContextGL::Make();
+    }
+    return reinterpret_cast<ExternalPointer>(g_ownedOreContextGL.get());
+}
+#endif
+
+// Return the ore::Context* stored on the Lua VM's ScriptingContext.
+// Used by the JS pcall wrapper to look up which GL context to activate
+// before executing Lua — the ore context IS the RenderTexture identity.
+EXPORT ExternalPointer riveLuaGetVMOreCtxPtr(lua_State* L)
+{
+    auto* ctx = static_cast<rive::ScriptingContext*>(lua_getthreaddata(L));
+    return ctx ? reinterpret_cast<ExternalPointer>(ctx->oreContext()) : 0;
+}
+
+#endif // RIVE_CANVAS
 
 EXPORT void riveLuaCall(lua_State* state, int nargs, int nresults)
 {
@@ -535,10 +633,44 @@ static int riveErrorHandler(lua_State* L)
 
 EXPORT int riveLuaPCall(lua_State* state, int nargs, int nresults)
 {
-    DartExposedScriptingContext* context =
+    auto* context =
         static_cast<DartExposedScriptingContext*>(lua_getthreaddata(state));
 
+#ifdef __EMSCRIPTEN__
+    int vmGL = context->glHandle();
+    int prevGL = emscripten_webgl_get_current_context();
+    if (vmGL && vmGL != prevGL)
+    {
+        emscripten_webgl_make_context_current(vmGL);
+    }
+
+    // Auto-open a mini-frame if a Lua callback fires outside the normal render
+    // boundary (e.g. a Coop stream event between endFrame and next beginFrame).
+    // Without an open frame, ore resources are freed and GL IDs recycled by
+    // the wrong context, causing "object does not belong to this context".
+    bool autoFrameOpened = false;
+    if (vmGL && !context->oreFrameOpen())
+    {
+        context->setOreFrameOpen(true);
+        riveGPUBeginFrame(state);
+        autoFrameOpened = true;
+    }
+
+    int result = context->pCall(state, nargs, nresults);
+
+    if (autoFrameOpened)
+    {
+        riveGPUEndFrame(state);
+        context->setOreFrameOpen(false);
+        if (context->renderContext())
+            riveInvalidateGLState((uintptr_t)context->renderContext());
+    }
+    if (vmGL && vmGL != prevGL)
+        emscripten_webgl_make_context_current(prevGL);
+    return result;
+#else
     return context->pCall(state, nargs, nresults);
+#endif
 }
 
 EXPORT void riveLuaPushArtboard(lua_State* state,
@@ -1084,6 +1216,144 @@ EXPORT void riveLuaPushBlob(lua_State* state,
     }
 }
 
+// Poll for completed async tasks (image decodes, etc.) and invoke callbacks.
+// maxCallbacks of 0 defaults to 256 as a safety cap. Returns number processed.
+EXPORT uint32_t riveLuaPollAsyncWork(lua_State* state, uint32_t maxCallbacks)
+{
+    if (state == nullptr)
+    {
+        return 0;
+    }
+    ScriptingContext* context =
+        static_cast<ScriptingContext*>(lua_getthreaddata(state));
+    if (context == nullptr)
+    {
+        return 0;
+    }
+    WorkPool* wp = context->workPool();
+    if (wp == nullptr)
+    {
+        return 0;
+    }
+    return wp->pollCompletedWork(maxCallbacks == 0 ? 256 : maxCallbacks);
+}
+
+// Check if there are any pending async tasks.
+EXPORT bool riveLuaHasPendingAsyncWork(lua_State* state)
+{
+    if (state == nullptr)
+    {
+        return false;
+    }
+    ScriptingContext* context =
+        static_cast<ScriptingContext*>(lua_getthreaddata(state));
+    if (context == nullptr)
+    {
+        return false;
+    }
+    WorkPool* wp = context->workPool();
+    if (wp == nullptr)
+    {
+        return false;
+    }
+    return wp->hasPendingWork();
+}
+
+// C++ linkage — defined in lua_image_decode.cpp outside any namespace.
+extern int context_decodeImage_impl(lua_State* L);
+
+// Forwards to context_decodeImage_impl which reads the buffer from Lua stack
+// position 2 and returns a Promise. Called from the Dart-side context table.
+EXPORT int riveLuaDecodeImage(lua_State* state)
+{
+    if (state == nullptr)
+    {
+        return 0;
+    }
+    return context_decodeImage_impl(state);
+}
+
+// Look up a shader by name from the per-VM ScriptingContext (editor path) or
+// file assets (runtime path) and push the resulting ScriptedShader onto the
+// Lua stack. Returns 1 on success, 0 if not found or compile failed.
+EXPORT int riveLuaPushShader(lua_State* state, const char* name)
+{
+#if defined(RIVE_CANVAS) && defined(RIVE_ORE)
+    if (state == nullptr || name == nullptr)
+    {
+        return 0;
+    }
+    return lua_gpu_push_shader_by_name(state, name);
+#else
+    return 0;
+#endif
+}
+
+// Push a GPU features table onto the Lua stack. Proxies through to the same
+// implementation used by context_namecall's features case.
+EXPORT int riveLuaPushGPUFeatures(lua_State* state)
+{
+    if (state == nullptr)
+    {
+        return 0;
+    }
+    return lua_push_gpu_features(state);
+}
+
+// Push the platform's preferred canvas color format onto the Lua stack as a
+// string. Proxies through to the same implementation used by context_namecall's
+// preferredCanvasFormat case.
+EXPORT int riveLuaPushPreferredCanvasFormat(lua_State* state)
+{
+    if (state == nullptr)
+    {
+        return 0;
+    }
+    return lua_push_preferred_canvas_format(state);
+}
+
+// On WASM we need wrappers around riveGPUBeginFrame / riveGPUEndFrame that add
+// WebGL context switching.  On native, those functions (in
+// rive_luau_binding_gpu.cpp) are EXPORT'd and Dart FFI looks them up directly.
+#ifdef __EMSCRIPTEN__
+EXPORT void riveGPUBeginFrameExport(lua_State* L)
+{
+    auto* ctx = static_cast<ScriptingContext*>(lua_getthreaddata(L));
+    int vmGL = ctx->glHandle();
+    if (vmGL)
+    {
+        int prevGL = emscripten_webgl_get_current_context();
+        ctx->setPrevGLContext(prevGL);
+        if (vmGL != prevGL)
+            emscripten_webgl_make_context_current(vmGL);
+        ctx->setOreFrameOpen(true);
+    }
+    riveGPUBeginFrame(L);
+}
+
+EXPORT void riveGPUEndFrameExport(lua_State* L)
+{
+    auto* ctx = static_cast<ScriptingContext*>(lua_getthreaddata(L));
+    int vmGL = ctx->glHandle();
+    if (vmGL)
+    {
+        int currentGL = emscripten_webgl_get_current_context();
+        if (vmGL != currentGL)
+            emscripten_webgl_make_context_current(vmGL);
+    }
+    riveGPUEndFrame(L);
+    if (vmGL)
+    {
+        ctx->setOreFrameOpen(false);
+        if (ctx->renderContext())
+            riveInvalidateGLState((uintptr_t)ctx->renderContext());
+        int prevGL = (int)ctx->prevGLContext();
+        if (prevGL && prevGL != vmGL)
+            emscripten_webgl_make_context_current(prevGL);
+    }
+}
+#endif
+
 #ifdef WITH_RIVE_AUDIO
 
 // Push an AudioSource onto the Lua stack as a ScriptedAudioSource userdata.
@@ -1110,6 +1380,34 @@ EXPORT int riveLuaPushAudioSource(WasmPtr state, WasmPtr audioSource)
     return 1;
 }
 #endif
+
+EXPORT void riveLuaEnableDrawCanvasPhase(lua_State* state)
+{
+    if (state == nullptr)
+    {
+        return;
+    }
+    auto* context = static_cast<ScriptingContext*>(lua_getthreaddata(state));
+    if (context)
+    {
+
+        context->setCanvasDrawingPhase(true);
+    }
+}
+
+EXPORT void riveLuaDisableDrawCanvasPhase(lua_State* state)
+{
+    if (state == nullptr)
+    {
+        return;
+    }
+    auto* context = static_cast<ScriptingContext*>(lua_getthreaddata(state));
+    if (context)
+    {
+
+        context->setCanvasDrawingPhase(false);
+    }
+}
 
 EXPORT void riveLuaSetExecutionTimeout(lua_State* state, int timeoutMs)
 {
@@ -1250,7 +1548,7 @@ EXPORT int riveLuaPushImage(WasmPtr state, WasmPtr renderImage)
         return 0;
     }
 
-    auto scriptedImage = lua_newrive<ScriptedImage>(L);
+    auto scriptedImage = ScriptedImage::luaNew(L);
     // ref_rcp increments ref count, rcp<> destructor will decrement when
     // ScriptedImage is GC'd
     scriptedImage->image = ref_rcp(img);
@@ -1320,14 +1618,15 @@ EMSCRIPTEN_BINDINGS(RiveLuauBinding)
     function("riveVMGetState", optional_override([](WasmPtr vmPtr) -> WasmPtr {
                  return (WasmPtr)riveVMGetState((ExternalPointer)vmPtr);
              }));
-    function(
-        "riveVMAdopt",
-        optional_override([](WasmPtr vmPtr,
-                             WasmPtr factory,
-                             emscripten::val consoleHasDataCallback) -> void {
-            riveVMAdopt((ExternalPointer)vmPtr,
-                        (ExternalPointer)factory,
-                        consoleHasDataCallback);
-        }));
+    function("riveVMAdopt",
+             optional_override([](WasmPtr vmPtr,
+                                  WasmPtr factory,
+                                  emscripten::val consoleHasDataCallback,
+                                  int glHandle) -> void {
+                 riveVMAdopt((ExternalPointer)vmPtr,
+                             (ExternalPointer)factory,
+                             consoleHasDataCallback,
+                             glHandle);
+             }));
 }
 #endif

@@ -257,6 +257,16 @@ abstract class File {
   @internal
   void clearViewModelInstances();
 
+  /// Resolves the runtime file asset index for a [ViewModelInstanceAssetImage]
+  /// when its bound render image matches a file [ImageAsset].
+  ///
+  /// [coreAddress] is [InternalViewModelInstanceValue.instancePointerAddress]
+  /// for the property (the native `ViewModelInstanceAssetImage*`).
+  ///
+  /// Returns `null` when unresolved (including `UINT32_MAX`).
+  @internal
+  int? resolveViewModelInstanceAssetImageRuntimeIndex(int coreAddress);
+
   /// Updates the scripting state (Lua VM) associated with this file.
   /// This allows reusing an existing file with a new VM without regenerating it.
   @internal
@@ -1112,8 +1122,26 @@ abstract class Artboard {
   /// The bounding box in world coordinates.
   AABB get worldBounds;
 
+  /// Runs the GPU canvas pre-pass for this artboard and all nested artboards.
+  /// Must be called after advance() and before draw() to prevent ore render
+  /// passes from interleaving with the active 2D render pass (critical on
+  /// Metal tile-based GPUs). No-op when no drawCanvas scripts are present.
+  void drawCanvases();
+
+  /// Returns the [LuauState] for the first drawCanvas scripted object found
+  /// in this artboard or any nested artboard (recursive). Returns null when
+  /// no drawCanvas scripts exist. Used to open the GPU frame before calling
+  /// [drawCanvases].
+  LuauState? get drawCanvasState;
+
   /// Draws this artboard using the provided [renderer].
   void draw(Renderer renderer);
+
+  /// Advances the static frame ID counter. Must be called once per frame
+  /// before [drawInternal] when not using [draw] (which increments it
+  /// automatically). The frame ID is used by scripted paths to detect
+  /// modifications between draws in the same frame.
+  void advanceFrameId();
 
   /// Returns the default state machine, or `null` if none is set.
   StateMachine? defaultStateMachine();
@@ -2425,7 +2453,10 @@ enum EventType {
   general(128),
 
   /// An event to open a URL.
-  openURL(131);
+  openURL(131),
+
+  /// An event that plays an audio asset.
+  audio(407);
 
   final int value;
   const EventType(this.value);
@@ -2433,6 +2464,7 @@ enum EventType {
   static final from = {
     128: general,
     131: openURL,
+    407: audio,
   };
 }
 
@@ -2554,8 +2586,9 @@ mixin EventPropertyMixin implements EventInterface {
 
 /// A Rive event emitted by a state machine.
 ///
-/// Events can be [GeneralEvent] or [OpenUrlEvent]. Access via
-/// [StateMachine.reportedEvents] or listen via [StateMachine.addEventListener].
+/// Events can be [GeneralEvent], [OpenUrlEvent], or [AudioRuntimeEvent].
+/// Access via [StateMachine.reportedEvents] or listen via
+/// [StateMachine.addEventListener].
 sealed class Event implements EventInterface {}
 
 /// A general purpose Rive event with optional custom properties.
@@ -2568,6 +2601,23 @@ abstract class OpenUrlEvent extends Event {
 
   /// The browser target for opening the URL.
   OpenUrlTarget get target;
+}
+
+/// A Rive event that plays an audio asset at runtime.
+abstract class AudioRuntimeEvent extends Event {
+  /// The id of the audio asset referenced by this event.
+  int get assetId;
+
+  /// The name of the audio asset, as defined in the Rive editor.
+  ///
+  /// Returns an empty string when the asset cannot be resolved (for example
+  /// when an out-of-band asset has not been loaded).
+  String get assetName;
+
+  /// The audio asset's volume multiplier (1.0 = unchanged).
+  ///
+  /// Returns 0.0 when the asset cannot be resolved.
+  double get volume;
 }
 
 /// Interface for custom properties attached to Rive events.
