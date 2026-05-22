@@ -25,8 +25,13 @@ RIVE_AUDIO=system
 
 if [[ $OS == "windows" ]]; then
     if ! command -v msbuild.exe &>/dev/null; then
-        powershell "./build.ps1" $@
-        exit $?
+        SETUP_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../runtime/build" && pwd)/setup_windows_dev.sh"
+        if [ -f "$SETUP_SCRIPT" ]; then
+            source "$SETUP_SCRIPT"
+        else
+            powershell "./build.ps1" $@
+            exit $?
+        fi
     fi
 fi
 

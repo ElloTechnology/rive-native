@@ -1,6 +1,7 @@
 #ifndef _RIVE_LISTENER_INVOCATION_HPP_
 #define _RIVE_LISTENER_INVOCATION_HPP_
 
+#include "rive/animation/semantic_listener_group.hpp"
 #include "rive/input/focusable.hpp"
 #include "rive/listener_type.hpp"
 #include "rive/math/vec2d.hpp"
@@ -15,7 +16,6 @@ namespace rive
 class Event;
 class FocusListenerGroup;
 class ListenerViewModel;
-
 /// Discriminator for what triggered a listener's actions. Not to be confused
 /// with `rive::Event` (file/timeline event objects).
 enum class ListenerInvocationKind : uint8_t
@@ -28,6 +28,7 @@ enum class ListenerInvocationKind : uint8_t
     viewModelChange = 5,
     none = 6,
     gamepad = 7,
+    semantic = 8,
 };
 
 struct PointerInvocation
@@ -82,6 +83,12 @@ struct GamepadInvocation
     float axis0 = 0.f;
 };
 
+struct SemanticInvocation
+{
+    SemanticListenerGroup* group = nullptr;
+    SemanticActionType actionType{};
+};
+
 using ListenerInvocationStorage = std::variant<PointerInvocation,
                                                KeyboardInvocation,
                                                TextInputInvocation,
@@ -89,7 +96,8 @@ using ListenerInvocationStorage = std::variant<PointerInvocation,
                                                ReportedEventInvocation,
                                                ViewModelChangeInvocation,
                                                NoneInvocation,
-                                               GamepadInvocation>;
+                                               GamepadInvocation,
+                                               SemanticInvocation>;
 
 /// Payload for a single run of listener actions (pointer, keyboard, reported
 /// event, etc.).
@@ -114,6 +122,8 @@ public:
     static ListenerInvocation gamepad(int deviceId,
                                       uint64_t buttonMask,
                                       float axis0);
+    static ListenerInvocation semantic(SemanticListenerGroup* group,
+                                       SemanticActionType actionType);
 
     ListenerInvocationKind kind() const;
 
@@ -125,6 +135,7 @@ public:
     const ViewModelChangeInvocation* asViewModelChange() const;
     const NoneInvocation* asNone() const;
     const GamepadInvocation* asGamepad() const;
+    const SemanticInvocation* asSemantic() const;
 
     const ListenerInvocationStorage& storage() const { return m_storage; }
 
@@ -172,6 +183,10 @@ inline ListenerInvocationKind ListenerInvocation::kind() const
             else if constexpr (std::is_same_v<T, GamepadInvocation>)
             {
                 return ListenerInvocationKind::gamepad;
+            }
+            else if constexpr (std::is_same_v<T, SemanticInvocation>)
+            {
+                return ListenerInvocationKind::semantic;
             }
             else
             {
@@ -221,6 +236,11 @@ inline const NoneInvocation* ListenerInvocation::asNone() const
 inline const GamepadInvocation* ListenerInvocation::asGamepad() const
 {
     return std::get_if<GamepadInvocation>(&m_storage);
+}
+
+inline const SemanticInvocation* ListenerInvocation::asSemantic() const
+{
+    return std::get_if<SemanticInvocation>(&m_storage);
 }
 
 } // namespace rive

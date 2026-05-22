@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:meta/meta.dart';
 import 'package:rive_native/focus.dart' as focus;
 import 'package:rive_native/rive_luau.dart';
+import 'package:rive_native/semantics.dart';
 
 import '../rive_native.dart';
 import 'ffi/rive_ffi.dart' if (dart.library.js_interop) 'web/rive_web.dart';
@@ -1356,7 +1357,7 @@ abstract class Artboard {
   /// Instead, use the [bindViewModelInstance] method.
   @internal
   void internalBindViewModelInstance(InternalViewModelInstance instance,
-      InternalDataContext dataContext, bool isRoot);
+      InternalDataContext? dataContext, bool isRoot);
 
   /// This method is used internally and should not be called directly.
   /// Instead, use the [bindViewModelInstance] method.
@@ -1517,17 +1518,28 @@ abstract interface class InternalViewModelInstanceSymbolListIndex
 /// Use [ViewModelInstance] instead.
 @internal
 abstract class InternalViewModelInstance {
-  InternalViewModelInstanceViewModel propertyViewModel(int index);
-  InternalViewModelInstanceNumber propertyNumber(int index);
-  InternalViewModelInstanceBoolean propertyBoolean(int index);
-  InternalViewModelInstanceColor propertyColor(int index);
-  InternalViewModelInstanceString propertyString(int index);
-  InternalViewModelInstanceTrigger propertyTrigger(int index);
-  InternalViewModelInstanceEnum propertyEnum(int index);
-  InternalViewModelInstanceList propertyList(int index);
-  InternalViewModelInstanceSymbolListIndex propertySymbolListIndex(int index);
-  InternalViewModelInstanceAsset propertyAsset(int index);
-  InternalViewModelInstanceArtboard propertyArtboard(int index);
+  InternalViewModelInstanceViewModel propertyViewModel(
+      int index, String name, int propertyType);
+  InternalViewModelInstanceNumber propertyNumber(
+      int index, String name, int propertyType);
+  InternalViewModelInstanceBoolean propertyBoolean(
+      int index, String name, int propertyType);
+  InternalViewModelInstanceColor propertyColor(
+      int index, String name, int propertyType);
+  InternalViewModelInstanceString propertyString(
+      int index, String name, int propertyType);
+  InternalViewModelInstanceTrigger propertyTrigger(
+      int index, String name, int propertyType);
+  InternalViewModelInstanceEnum propertyEnum(
+      int index, String name, int propertyType);
+  InternalViewModelInstanceList propertyList(
+      int index, String name, int propertyType);
+  InternalViewModelInstanceSymbolListIndex propertySymbolListIndex(
+      int index, String name, int propertyType);
+  InternalViewModelInstanceAsset propertyAsset(
+      int index, String name, int propertyType);
+  InternalViewModelInstanceArtboard propertyArtboard(
+      int index, String name, int propertyType);
   String uniqueId();
   void dispose();
 }
@@ -2095,6 +2107,16 @@ enum Key {
   }
 }
 
+/// Semantic action types that can be fired on a semantic node.
+/// Values match the C++ SemanticActionType enum.
+///
+/// Order must match the C++ SemanticActionType enum (index).
+enum SemanticActionType {
+  tap,
+  increase,
+  decrease,
+}
+
 /// A Rive state machine that drives animations based on inputs and logic.
 ///
 /// State machines provide interactive control over animations. Obtain via
@@ -2220,6 +2242,28 @@ abstract class StateMachine
 
   /// Notifies the state machine of a drag end event at [position].
   HitResult dragEnd(Vec2D position, {double? timeStamp});
+
+  /// Enable semantics for this state machine. Creates the internal semantic
+  /// manager and builds the semantic tree. No-op if already enabled.
+  @experimental
+  @internal
+  void enableSemantics();
+
+  /// Returns the semantic diff since the last call.
+  /// Returns an empty diff if semantics is not enabled or nothing changed.
+  @experimental
+  @internal
+  SemanticsDiff drainSemanticsDiff();
+
+  /// Request focus on the FocusData sibling of the SemanticData that owns
+  /// the given semantic node ID. Returns true if focus was set.
+  @experimental
+  @internal
+  bool focusSemanticNode(int semanticNodeId);
+
+  /// Fires a semantic action on the semantic node with the given
+  /// [semanticNodeId].
+  void fireSemanticAction(int semanticNodeId, SemanticActionType actionType);
 
   /// Binds the provided [viewModelInstance] to the state machine
   ///

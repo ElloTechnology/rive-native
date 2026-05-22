@@ -15,6 +15,7 @@ import 'package:rive_native/src/wasm_version.dart';
 import 'package:rive_native/src/web/layout_engine_web.dart';
 import 'package:rive_native/src/web/rive_audio_web.dart';
 import 'package:rive_native/src/web/rive_focus_web.dart';
+import 'package:rive_native/src/web/rive_semantic_web.dart';
 import 'package:rive_native/src/web/rive_luau_web.dart';
 import 'package:rive_native/src/web/rive_renderer_web.dart';
 import 'package:rive_native/src/web/rive_text_web.dart';
@@ -680,6 +681,7 @@ class RiveWasm {
   static late js.JSFunction rawTextInputSetSeparateSelectionText;
   static late js.JSFunction rawTextInputGetText;
   static late js.JSFunction rawTextInputSetText;
+  static late js.JSFunction rawTextInputSetTextPreserveCursor;
   static late js.JSFunction rawTextInputLength;
   static late js.JSFunction rawTextInputBounds;
   static late js.JSFunction rawTextInputUpdate;
@@ -1321,6 +1323,8 @@ class RiveWasm {
         module['_rawTextInputSetSeparateSelectionText'] as js.JSFunction;
     rawTextInputGetText = module['_rawTextInputGetText'] as js.JSFunction;
     rawTextInputSetText = module['_rawTextInputSetText'] as js.JSFunction;
+    rawTextInputSetTextPreserveCursor =
+        module['_rawTextInputSetTextPreserveCursor'] as js.JSFunction;
     freeString = module['_freeString'] as js.JSFunction;
     rawTextInputLength = module['_rawTextInputLength'] as js.JSFunction;
     rawTextInputBounds = module['_rawTextInputBounds'] as js.JSFunction;
@@ -1455,6 +1459,7 @@ Future<RiveNative?> _loadWasm(String source, String name) async {
       TextEngine.link(module);
       AudioEngineWasm.link(module);
       FocusManagerWasm.link(module);
+      SemanticsWasm.link(module);
       completer.complete(_WebRiveNative());
     }.toJS,
     ((js.JSAny? error) => completer.complete(null)).toJS,

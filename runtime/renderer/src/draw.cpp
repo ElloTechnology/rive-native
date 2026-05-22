@@ -369,7 +369,7 @@ void Draw::setClipID(uint32_t clipID)
     // For clipUpdates, m_clipID refers to the ID we are writing to the stencil
     // buffer (NOT the ID we are clipping against). It therefore doesn't affect
     // the activeClip flag in that case.
-    if (!(m_drawContents & gpu::DrawContents::clipUpdate))
+    if (!enums::is_flag_set(m_drawContents, gpu::DrawContents::clipUpdate))
     {
         if (m_clipID != 0)
         {
@@ -1407,7 +1407,10 @@ bool PathDraw::allocateResources(RenderContext::LogicalFlush* flush)
 
     // Allocate a coverage buffer range or atlas region if needed.
     if (m_coverageType == CoverageType::atlas ||
-        m_coverageType == CoverageType::clockwiseAtomic)
+        (m_coverageType == CoverageType::clockwiseAtomic &&
+         // Outermost (i.e., non-nested) clockwiseAtomic clips render directly
+         // to the clip buffer without using the coverage buffer.
+         !isOutermostClipUpdate()))
     {
         constexpr static int PADDING = 2;
 
@@ -1499,9 +1502,10 @@ void PathDraw::countSubpasses()
 
         case CoverageType::clockwiseAtomic:
             m_subpassCount = (m_triangulator != nullptr) ? 2 : 1;
-            if (!isStroke())
+            if (needsBorrowedCoveragePrepass())
             {
-                m_prepassCount = m_subpassCount; // Borrowed coverage.
+                // Add prepasses for borrowed coverage.
+                m_prepassCount = m_subpassCount;
             }
             break;
 
@@ -1515,10 +1519,11 @@ void PathDraw::countSubpasses()
                      gpu::kNestedClipUpdateMask)
             {
                 // Nested clip updates only have a stencil pass. (The reset is
-                // handled by a separate msaaStencilClipReset draw.)
+                // handled by a separate ClipReset draw.)
                 m_subpassCount = 1;
             }
-            else if (m_drawContents & gpu::DrawContents::evenOddFill)
+            else if (enums::is_flag_set(m_drawContents,
+                                        gpu::DrawContents::evenOddFill))
             {
                 m_subpassCount = 2; // MSAA "slow" path: stencil-then-cover.
             }
@@ -1530,8 +1535,9 @@ void PathDraw::countSubpasses()
             if (isOpaque())
             {
                 const bool usesClipping =
-                    m_drawContents & (gpu::DrawContents::activeClip |
-                                      gpu::DrawContents::clipUpdate);
+                    enums::any_flag_set(m_drawContents,
+                                        gpu::DrawContents::activeClip |
+                                            gpu::DrawContents::clipUpdate);
                 if (!usesClipping)
                 {
                     // Render this path front-to-back instead of back-to-front.
@@ -1615,11 +1621,12 @@ void PathDraw::pushToRenderContext(RenderContext::LogicalFlush* flush,
         }
 
         case CoverageType::clockwiseAtomic:
-            if (!isStroke())
+            if (m_prepassCount != 0)
             {
                 // The subpass and prepass each emit half the vertices.
                 assert(m_prepassCount == m_subpassCount);
                 assert(tessVertexCount % 2 == 0);
+                assert(needsBorrowedCoveragePrepass());
                 tessVertexCount /= 2;
             }
             switch (subpassIndex)
@@ -1652,8 +1659,9 @@ void PathDraw::pushToRenderContext(RenderContext::LogicalFlush* flush,
                     flush->pushInteriorTriangulationDraw(
                         this,
                         m_pathID,
-                        subpassIndex < 0 ? gpu::WindingFaces::negative
-                                         : gpu::WindingFaces::positive,
+                        m_prepassCount == 0 ? gpu::WindingFaces::all
+                        : subpassIndex < 0  ? gpu::WindingFaces::negative
+                                            : gpu::WindingFaces::positive,
                         subpassIndex < 0
                             ? gpu::ShaderMiscFlags::borrowedCoveragePass
                             : gpu::ShaderMiscFlags::none);
@@ -1681,7 +1689,7 @@ void PathDraw::pushToRenderContext(RenderContext::LogicalFlush* flush,
             }
             constexpr static gpu::DrawType MSAA_FILL_TYPES[][3] = {
                 // Nested clip update (passCount == 1; the reset is handled by a
-                // separate msaaStencilClipReset draw.)
+                // separate ClipReset draw.)
                 {
                     gpu::DrawType::msaaMidpointFanPathsStencil,
                 },
@@ -1792,14 +1800,14 @@ void PathDraw::pushTessellationData(RenderContext::LogicalFlush* flush,
             mirroredTessLocation = tessLocation + tessVertexCount;
             break;
         case gpu::ContourDirections::reverseThenForward:
-            if (m_coverageType == CoverageType::clockwiseAtomic && !isStroke())
+            if (m_coverageType == CoverageType::clockwiseAtomic &&
+                m_prepassTessLocation != 0) // With padding, this will only be
+                                            // zero if it's not needed.
             {
                 // The tessellation for borrowed coverage was allocated at a
                 // different location than the forward tessellation, both with
                 // "tessVertexCount" vertices.
-                assert(m_prepassTessLocation != 0); // With padding, this will
-                                                    // only be zero if it wasn't
-                                                    // initialized.
+                assert(needsBorrowedCoveragePrepass());
                 forwardTessVertexCount = mirroredTessVertexCount =
                     tessVertexCount;
                 forwardTessLocation = tessLocation;
@@ -1818,14 +1826,14 @@ void PathDraw::pushTessellationData(RenderContext::LogicalFlush* flush,
             }
             break;
         case gpu::ContourDirections::forwardThenReverse:
-            if (m_coverageType == CoverageType::clockwiseAtomic && !isStroke())
+            if (m_coverageType == CoverageType::clockwiseAtomic &&
+                m_prepassTessLocation != 0) // With padding, this will only be
+                                            // zero if it's not needed.
             {
                 // The tessellation for borrowed coverage was allocated at a
                 // different location than the forward tessellation, both with
                 // "tessVertexCount" vertices.
-                assert(m_prepassTessLocation != 0); // With padding, this will
-                                                    // only be zero if it wasn't
-                                                    // initialized.
+                assert(needsBorrowedCoveragePrepass());
                 forwardTessVertexCount = mirroredTessVertexCount =
                     tessVertexCount;
                 forwardTessLocation = m_prepassTessLocation;
@@ -2592,10 +2600,10 @@ void ImageMeshDraw::releaseRefs()
     m_indexBufferRef->unref();
 }
 
-StencilClipReset::StencilClipReset(RenderContext* context,
-                                   uint32_t previousClipID,
-                                   gpu::DrawContents previousClipDrawContents,
-                                   ResetAction resetAction) :
+ClipReset::ClipReset(RenderContext* context,
+                     uint32_t previousClipID,
+                     gpu::DrawContents previousClipDrawContents,
+                     ResetAction resetAction) :
     Draw(context->getClipContentBounds(previousClipID),
          Mat2D(),
          BlendMode::srcOver,
@@ -2620,10 +2628,10 @@ StencilClipReset::StencilClipReset(RenderContext* context,
     m_resourceCounts.maxTriangleVertexCount = 6;
 }
 
-void StencilClipReset::pushToRenderContext(RenderContext::LogicalFlush* flush,
-                                           int subpassIndex)
+void ClipReset::pushToRenderContext(RenderContext::LogicalFlush* flush,
+                                    int subpassIndex)
 {
     assert(subpassIndex == 0);
-    flush->pushStencilClipResetDraw(this);
+    flush->pushClipResetDraw(this);
 }
 } // namespace rive::gpu

@@ -586,6 +586,7 @@ abstract class RawTextInput {
 
   String get text;
   set text(String value);
+  void setTextPreserveCursor(String value);
 
   int get length;
   bool get isEmpty => length == 0;

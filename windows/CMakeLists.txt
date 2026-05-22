@@ -65,7 +65,9 @@ set_target_properties(${PLUGIN_NAME} PROPERTIES
   CXX_VISIBILITY_PRESET hidden)
 target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
 target_compile_options(${PLUGIN_NAME} PUBLIC $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/utf-8>)
-target_compile_options(${PLUGIN_NAME} INTERFACE $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/utf-8>)    
+target_compile_options(${PLUGIN_NAME} INTERFACE $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/utf-8>)
+# Disable C4459 (variable shadowing) — triggered in third-party spdlog/fmt headers.
+target_compile_options(${PLUGIN_NAME} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/wd4459>)    
 include_directories(
     "${CMAKE_CURRENT_SOURCE_DIR}/include/external"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"

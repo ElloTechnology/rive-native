@@ -17,6 +17,7 @@ export 'src/rive_artboard_layout.dart';
 export 'src/rive_ticker_aware_painter.dart';
 export 'src/rive_widget.dart';
 export 'src/rive_hit_test.dart';
+export 'src/rive_semantics.dart';
 export 'src/defaults.dart';
 export 'rive_audio.dart' show AudioSource;
 export 'rive_text.dart' show Font;

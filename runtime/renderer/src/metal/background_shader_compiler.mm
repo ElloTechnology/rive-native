@@ -6,6 +6,8 @@
 
 #include "generated/shaders/metal.glsl.hpp"
 #include "generated/shaders/constants.glsl.hpp"
+#include "generated/shaders/image_draw_uniforms.glsl.hpp"
+#include "generated/shaders/flush_uniforms.glsl.hpp"
 #include "generated/shaders/common.glsl.hpp"
 #include "generated/shaders/advanced_blend.glsl.hpp"
 #include "generated/shaders/draw_path_common.glsl.hpp"
@@ -100,8 +102,8 @@ void BackgroundShaderCompiler::threadMain()
         defines[@GLSL_FRAGMENT] = @"";
         for (size_t i = 0; i < gpu::kShaderFeatureCount; ++i)
         {
-            ShaderFeatures feature = static_cast<ShaderFeatures>(1 << i);
-            if (shaderFeatures & feature)
+            const auto feature = ShaderFeatures(1 << i);
+            if (enums::is_flag_set(shaderFeatures, feature))
             {
                 const char* macro = gpu::GetShaderFeatureGLSLName(feature);
                 defines[[NSString stringWithUTF8String:macro]] = @"1";
@@ -116,13 +118,15 @@ void BackgroundShaderCompiler::threadMain()
             {
                 defines[@GLSL_PLS_IMPL_DEVICE_BUFFER_RASTER_ORDERED] = @"";
             }
-            if (shaderMiscFlags &
-                gpu::ShaderMiscFlags::fixedFunctionColorOutput)
+            if (enums::is_flag_set(
+                    shaderMiscFlags,
+                    gpu::ShaderMiscFlags::fixedFunctionColorOutput))
             {
                 defines[@GLSL_FIXED_FUNCTION_COLOR_OUTPUT] = @"";
             }
         }
-        if (shaderMiscFlags & gpu::ShaderMiscFlags::clockwiseFill)
+        if (enums::is_flag_set(shaderMiscFlags,
+                               gpu::ShaderMiscFlags::clockwiseFill))
         {
             defines[@GLSL_CLOCKWISE_FILL] = @"1";
         }
@@ -130,9 +134,16 @@ void BackgroundShaderCompiler::threadMain()
         auto source =
             [[NSMutableString alloc] initWithCString:gpu::glsl::metal
                                             encoding:NSUTF8StringEncoding];
-        [source
-            appendFormat:@"%s\n%s\n", gpu::glsl::constants, gpu::glsl::common];
-        if (shaderFeatures & ShaderFeatures::ENABLE_ADVANCED_BLEND)
+        [source appendFormat:@"%s\n%s\n%s\n",
+                             gpu::glsl::constants,
+                             gpu::glsl::flush_uniforms,
+                             gpu::glsl::common];
+        if (drawType == DrawType::imageRect || drawType == DrawType::imageMesh)
+        {
+            [source appendFormat:@"%s\n", gpu::glsl::image_draw_uniforms];
+        }
+        if (enums::is_flag_set(shaderFeatures,
+                               ShaderFeatures::ENABLE_ADVANCED_BLEND))
         {
             [source appendFormat:@"%s\n", gpu::glsl::advanced_blend];
         }
@@ -172,12 +183,14 @@ void BackgroundShaderCompiler::threadMain()
                 assert(interlockMode == InterlockMode::atomics);
                 defines[@GLSL_DRAW_RENDER_TARGET_UPDATE_BOUNDS] = @"";
                 defines[@GLSL_INITIALIZE_PLS] = @"";
-                if (shaderMiscFlags & gpu::ShaderMiscFlags::storeColorClear)
+                if (enums::is_flag_set(shaderMiscFlags,
+                                       gpu::ShaderMiscFlags::storeColorClear))
                 {
                     defines[@GLSL_STORE_COLOR_CLEAR] = @"";
                 }
-                if (shaderMiscFlags &
-                    gpu::ShaderMiscFlags::swizzleColorBGRAToRGBA)
+                if (enums::is_flag_set(
+                        shaderMiscFlags,
+                        gpu::ShaderMiscFlags::swizzleColorBGRAToRGBA))
                 {
                     defines[@GLSL_SWIZZLE_COLOR_BGRA_TO_RGBA] = @"";
                 }
@@ -190,8 +203,9 @@ void BackgroundShaderCompiler::threadMain()
                 assert(interlockMode == InterlockMode::atomics);
                 defines[@GLSL_DRAW_RENDER_TARGET_UPDATE_BOUNDS] = @"";
                 defines[@GLSL_RESOLVE_PLS] = @"";
-                if (shaderMiscFlags &
-                    gpu::ShaderMiscFlags::coalescedResolveAndTransfer)
+                if (enums::is_flag_set(
+                        shaderMiscFlags,
+                        gpu::ShaderMiscFlags::coalescedResolveAndTransfer))
                 {
                     defines[@GLSL_COALESCED_PLS_RESOLVE_AND_TRANSFER] = @"";
                 }
@@ -204,7 +218,7 @@ void BackgroundShaderCompiler::threadMain()
             case DrawType::msaaMidpointFanPathsStencil:
             case DrawType::msaaMidpointFanPathsCover:
             case DrawType::msaaOuterCubics:
-            case DrawType::msaaStencilClipReset:
+            case DrawType::clipReset:
                 RIVE_UNREACHABLE();
         }
 
@@ -248,7 +262,7 @@ void BackgroundShaderCompiler::threadMain()
                 case DrawType::msaaMidpointFanPathsStencil:
                 case DrawType::msaaMidpointFanPathsCover:
                 case DrawType::msaaOuterCubics:
-                case DrawType::msaaStencilClipReset:
+                case DrawType::clipReset:
                 case DrawType::renderPassInitialize:
                 case DrawType::renderPassResolve:
                     RIVE_UNREACHABLE();

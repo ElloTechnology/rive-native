@@ -1190,6 +1190,7 @@ EXPORT void riveLuaStopPlayback(lua_State* state)
     if (context)
     {
         context->isPlaying(false);
+        context->disposeOrphanScriptedProperties();
     }
 }
 

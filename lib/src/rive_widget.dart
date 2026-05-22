@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Animation;
 import 'package:meta/meta.dart';
 import 'package:rive_native/rive_native.dart';
+import 'package:rive_native/semantics.dart';
 import 'package:rive_native/src/rive.dart' show RiveProfiler;
 
 abstract base class ProceduralPainter extends RivePainter {
@@ -88,7 +89,7 @@ base class SingleAnimationPainter extends BasicArtboardPainter {
 }
 
 base class StateMachinePainter extends BasicArtboardPainter
-    with RivePointerEventMixin {
+    with RivePointerEventMixin, RiveSemanticsMixin {
   final String? stateMachineName;
   StateMachine? _stateMachine;
   StateMachine? get stateMachine => _stateMachine;
@@ -109,6 +110,9 @@ base class StateMachinePainter extends BasicArtboardPainter
   final void Function(StateMachine)? withStateMachine;
 
   @override
+  StateMachine? get semanticsStateMachine => _stateMachine;
+
+  @override
   void artboardChanged(Artboard artboard) {
     super.artboardChanged(artboard);
     _stateMachine?.dispose();
@@ -116,6 +120,9 @@ base class StateMachinePainter extends BasicArtboardPainter
         ? artboard.stateMachine(stateMachineName!)
         : artboard.defaultStateMachine();
     if (machine != null) {
+      if (isSemanticsEnabled) {
+        machine.enableSemantics();
+      }
       _inputCallbackHandler = machine.onInputChanged(_onInputChanged);
       withStateMachine?.call(machine);
     }
@@ -174,7 +181,9 @@ base class StateMachinePainter extends BasicArtboardPainter
 
   @override
   bool advance(double elapsedSeconds) {
-    return _stateMachine?.advanceAndApply(elapsedSeconds) ?? false;
+    final advanced = _stateMachine?.advanceAndApply(elapsedSeconds) ?? false;
+    updateSemantics();
+    return advanced;
   }
 
   @override
@@ -183,6 +192,7 @@ base class StateMachinePainter extends BasicArtboardPainter
     _stateMachine = null;
     _inputCallbackHandler?.dispose();
     _inputCallbackHandler = null;
+    disposeSemantics();
     super.dispose();
   }
 }
@@ -285,14 +295,159 @@ class _RiveArtboardWidgetState extends State<RiveArtboardWidget> {
   @override
   Widget build(BuildContext context) {
     if (widget.artboard.riveFactory == Factory.flutter) {
-      // Render the artboard with the Flutter renderer.
-      return FlutterRiveRendererWidget(
-        painter: widget.painter,
-      );
-    } else {
-      // Render the artboard with the Rive Renderer.
-      return ArtboardWidgetRiveRenderer(painter: widget.painter);
+      return FlutterRiveRendererWidget(painter: widget.painter);
     }
+    return ArtboardWidgetRiveRenderer(painter: widget.painter);
+  }
+}
+
+/// Widget that adds a semantic accessibility overlay to a Rive artboard.
+///
+/// Wrap a [RiveArtboardWidget] with this to enable screen reader support.
+/// The overlay reads the semantic tree from the painter and projects it
+/// as Flutter [SemanticsNode]s aligned with the artboard's visual elements.
+///
+/// ```dart
+/// RiveSemanticsWidget(
+///   artboard: artboard,
+///   painter: painter,
+///   child: RiveArtboardWidget(artboard: artboard, painter: painter),
+/// )
+/// ```
+@experimental
+@internal
+class RiveSemanticsWidget extends StatefulWidget {
+  final Artboard artboard;
+  final ArtboardPainter painter;
+  final Widget child;
+
+  const RiveSemanticsWidget({
+    required this.artboard,
+    required this.painter,
+    required this.child,
+    super.key,
+  });
+
+  @override
+  State<RiveSemanticsWidget> createState() => _RiveSemanticsWidgetState();
+}
+
+class _RiveSemanticsWidgetState extends State<RiveSemanticsWidget> {
+  @override
+  void initState() {
+    super.initState();
+    final sem = _semanticsMixin;
+    if (sem != null) {
+      _enableSemantics(sem, widget.painter);
+    }
+  }
+
+  RiveSemanticsMixin? get _semanticsMixin {
+    final painter = widget.painter;
+    return painter is RiveSemanticsMixin ? painter as RiveSemanticsMixin : null;
+  }
+
+  void _enableSemantics(RiveSemanticsMixin sem, ArtboardPainter painter) {
+    sem.semanticsEnabled = true;
+    // Prime one zero-delta advance so world transforms/text layout are
+    // valid before the first semantics snapshot.
+    painter.advance(0);
+    sem.semanticTree?.addListener(_onSemanticUpdate);
+  }
+
+  // Disabling disposes the SemanticTreeModel on the mixin (see
+  // RiveSemanticsMixin.semanticsEnabled setter), so a later re-enable
+  // always starts from an empty tree — no risk of applying a fresh diff
+  // stream onto nodes from a different artboard.
+  void _disableSemantics(RiveSemanticsMixin sem) {
+    sem.semanticTree?.removeListener(_onSemanticUpdate);
+    sem.semanticsEnabled = false;
+  }
+
+  void _onSemanticUpdate() {
+    setState(() {});
+  }
+
+  @override
+  void didUpdateWidget(covariant RiveSemanticsWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.artboard == widget.artboard &&
+        oldWidget.painter == widget.painter) {
+      return;
+    }
+    final oldPainter = oldWidget.painter;
+    if (oldPainter is RiveSemanticsMixin) {
+      _disableSemantics(oldPainter as RiveSemanticsMixin);
+    }
+    final sem = _semanticsMixin;
+    if (sem != null) {
+      _enableSemantics(sem, widget.painter);
+    }
+  }
+
+  @override
+  void dispose() {
+    final sem = _semanticsMixin;
+    if (sem != null) {
+      _disableSemantics(sem);
+    }
+    super.dispose();
+  }
+
+  StateMachine? get _stateMachine =>
+      _semanticsMixin?.semanticsStateMachine;
+
+  void _handleSemanticFocus(int semanticNodeId) {
+    _stateMachine?.focusSemanticNode(semanticNodeId);
+  }
+
+  void _handleSemanticTap(SemanticNodeData data) {
+    _stateMachine?.fireSemanticAction(data.id, SemanticActionType.tap);
+  }
+
+  void _handleSemanticIncrease(SemanticNodeData data) {
+    _stateMachine?.fireSemanticAction(data.id, SemanticActionType.increase);
+  }
+
+  void _handleSemanticDecrease(SemanticNodeData data) {
+    _stateMachine?.fireSemanticAction(data.id, SemanticActionType.decrease);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tree = _semanticsMixin?.semanticTree;
+    final bounds = widget.artboard.worldBounds;
+    if (tree == null) {
+      return widget.child;
+    }
+
+    final painter = widget.painter;
+    final layout = painter is RiveArtboardLayoutMixin
+        ? painter as RiveArtboardLayoutMixin
+        : null;
+    final fit = layout?.fit ?? Fit.contain;
+    final align = layout?.alignment ?? Alignment.center;
+    final scale = layout?.layoutScaleFactor ?? 1.0;
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        widget.child,
+        Positioned.fill(
+          child: RiveSemanticsOverlay(
+            tree: tree,
+            artboardBounds: bounds,
+            fit: fit,
+            alignment: align,
+            layoutScaleFactor: scale,
+            onSemanticTap: _handleSemanticTap,
+            onSemanticFocus: _handleSemanticFocus,
+            onSemanticIncrease: _handleSemanticIncrease,
+            onSemanticDecrease: _handleSemanticDecrease,
+          ),
+        ),
+      ],
+    );
   }
 }
 

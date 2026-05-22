@@ -221,6 +221,8 @@ static wgpu::ShaderModule compile_shader_module_spirv(wgpu::Device device,
 
 #include "generated/shaders/glsl.glsl.hpp"
 #include "generated/shaders/constants.glsl.hpp"
+#include "generated/shaders/image_draw_uniforms.glsl.hpp"
+#include "generated/shaders/flush_uniforms.glsl.hpp"
 #include "generated/shaders/common.glsl.hpp"
 #include "generated/shaders/color_ramp.glsl.hpp"
 #include "generated/shaders/bezier_utils.glsl.hpp"
@@ -310,7 +312,7 @@ public:
         m_framebufferFormat(framebufferFormat)
     {
         wgpu::PipelineLayoutDescriptor pipelineLayoutDesc;
-        if (actions & LoadStoreActionsEXT::clearColor)
+        if (enums::is_flag_set(actions, LoadStoreActionsEXT::clearColor))
         {
             // Create a uniform buffer binding for the clear color.
             wgpu::BindGroupLayoutEntry bindingLayouts[] = {
@@ -449,6 +451,7 @@ public:
             glsl << "#define " << GLSL_POST_INVERT_Y << " true\n";
             glsl << glsl::glsl << "\n";
             glsl << glsl::constants << "\n";
+            glsl << glsl::flush_uniforms << '\n';
             glsl << glsl::common << "\n";
             glsl << glsl::color_ramp << "\n";
 
@@ -592,6 +595,7 @@ public:
             glsl << "#define " << GLSL_POST_INVERT_Y << " true\n";
             glsl << glsl::glsl << "\n";
             glsl << glsl::constants << "\n";
+            glsl << glsl::flush_uniforms << "\n";
             glsl << glsl::common << "\n";
             glsl << glsl::bezier_utils << "\n";
             glsl << glsl::tessellate << "\n";
@@ -757,6 +761,7 @@ public:
             }
             glsl << glsl::glsl << '\n';
             glsl << glsl::constants << '\n';
+            glsl << glsl::flush_uniforms << '\n';
             glsl << glsl::common << '\n';
             glsl << glsl::draw_path_common << '\n';
             glsl << glsl::render_atlas << '\n';
@@ -903,7 +908,8 @@ public:
                  bool targetIsGLFBO0)
     {
         const bool fixedFunctionColorOutput =
-            shaderMiscFlags & gpu::ShaderMiscFlags::fixedFunctionColorOutput;
+            enums::is_flag_set(shaderMiscFlags,
+                               gpu::ShaderMiscFlags::fixedFunctionColorOutput);
         wgpu::ShaderModule vertexShader, fragmentShader;
 #ifdef RIVE_WAGYU
         PixelLocalStorageType plsType = context->m_capabilities.plsType;
@@ -991,7 +997,7 @@ public:
                 case DrawType::msaaMidpointFanPathsStencil:
                 case DrawType::msaaMidpointFanPathsCover:
                 case DrawType::msaaOuterCubics:
-                case DrawType::msaaStencilClipReset:
+                case DrawType::clipReset:
                 case DrawType::renderPassInitialize:
                 case DrawType::renderPassResolve:
                     RIVE_UNREACHABLE();
@@ -999,8 +1005,8 @@ public:
             }
             for (size_t i = 0; i < gpu::kShaderFeatureCount; ++i)
             {
-                ShaderFeatures feature = static_cast<ShaderFeatures>(1 << i);
-                if (shaderFeatures & feature)
+                const auto feature = ShaderFeatures(1 << i);
+                if (enums::is_flag_set(shaderFeatures, feature))
                 {
                     addDefine(GetShaderFeatureGLSLName(feature));
                 }
@@ -1009,18 +1015,22 @@ public:
             {
                 addDefine(GLSL_FIXED_FUNCTION_COLOR_OUTPUT);
             }
-            if (shaderMiscFlags & gpu::ShaderMiscFlags::clockwiseFill)
+            if (enums::is_flag_set(shaderMiscFlags,
+                                   gpu::ShaderMiscFlags::clockwiseFill))
             {
                 addDefine(GLSL_CLOCKWISE_FILL);
             }
-            if (shaderMiscFlags & gpu::ShaderMiscFlags::borrowedCoveragePass)
+            if (enums::is_flag_set(shaderMiscFlags,
+                                   gpu::ShaderMiscFlags::borrowedCoveragePass))
             {
                 addDefine(GLSL_BORROWED_COVERAGE_PASS);
             }
             glsl << gpu::glsl::glsl << '\n';
             glsl << gpu::glsl::constants << '\n';
+            glsl << glsl::flush_uniforms << '\n';
             glsl << gpu::glsl::common << '\n';
-            if (shaderFeatures & ShaderFeatures::ENABLE_ADVANCED_BLEND)
+            if (enums::is_flag_set(shaderFeatures,
+                                   ShaderFeatures::ENABLE_ADVANCED_BLEND))
             {
                 glsl << gpu::glsl::advanced_blend << '\n';
             }
@@ -1045,8 +1055,9 @@ public:
                     else
                     {
                         assert(interlockMode == gpu::InterlockMode::clockwise);
-                        glsl << ((shaderMiscFlags &
-                                  gpu::ShaderMiscFlags::clipUpdateOnly)
+                        glsl << (enums::is_flag_set(
+                                     shaderMiscFlags,
+                                     gpu::ShaderMiscFlags::clipUpdateOnly)
                                      ? gpu::glsl::draw_clockwise_clip_frag
                                      : gpu::glsl::draw_clockwise_path_frag)
                              << '\n';
@@ -1058,6 +1069,7 @@ public:
                     glsl << gpu::glsl::draw_mesh_frag << '\n';
                     break;
                 case DrawType::imageMesh:
+                    glsl << gpu::glsl::image_draw_uniforms << '\n';
                     glsl << gpu::glsl::draw_image_mesh_vert << '\n';
                     glsl << gpu::glsl::draw_mesh_frag << '\n';
                     break;
@@ -1069,7 +1081,7 @@ public:
                 case DrawType::msaaMidpointFanPathsStencil:
                 case DrawType::msaaMidpointFanPathsCover:
                 case DrawType::msaaOuterCubics:
-                case DrawType::msaaStencilClipReset:
+                case DrawType::clipReset:
                 case DrawType::renderPassInitialize:
                 case DrawType::renderPassResolve:
                     RIVE_UNREACHABLE();
@@ -1115,7 +1127,8 @@ public:
                 case DrawType::msaaMidpointFanPathsStencil:
                 case DrawType::msaaMidpointFanPathsCover:
                     vertCode =
-                        (shaderFeatures & ShaderFeatures::ENABLE_CLIP_RECT)
+                        enums::is_flag_set(shaderFeatures,
+                                           ShaderFeatures::ENABLE_CLIP_RECT)
                             ? make_span(spirv::draw_msaa_path_webgpu_vert)
                             : make_span(
                                   spirv::
@@ -1127,7 +1140,7 @@ public:
                             : make_span(spirv::draw_msaa_path_webgpu_frag);
                     break;
 
-                case DrawType::msaaStencilClipReset:
+                case DrawType::clipReset:
                     vertCode = make_span(spirv::draw_msaa_stencil_vert);
                     fragCode = make_span(spirv::draw_msaa_stencil_frag);
                     break;
@@ -1139,7 +1152,8 @@ public:
 
                 case DrawType::atlasBlit:
                     vertCode =
-                        (shaderFeatures & ShaderFeatures::ENABLE_CLIP_RECT)
+                        enums::is_flag_set(shaderFeatures,
+                                           ShaderFeatures::ENABLE_CLIP_RECT)
                             ? make_span(spirv::draw_msaa_atlas_blit_webgpu_vert)
                             : make_span(
                                   spirv::
@@ -1155,7 +1169,8 @@ public:
 
                 case DrawType::imageMesh:
                     vertCode =
-                        (shaderFeatures & ShaderFeatures::ENABLE_CLIP_RECT)
+                        enums::is_flag_set(shaderFeatures,
+                                           ShaderFeatures::ENABLE_CLIP_RECT)
                             ? make_span(spirv::draw_msaa_image_mesh_webgpu_vert)
                             : make_span(
                                   spirv::
@@ -1951,7 +1966,8 @@ public:
         m_queue(queue)
     {
         bool mappedOnceAtInitialization =
-            flags() & RenderBufferFlags::mappedOnceAtInitialization;
+            enums::is_flag_set(flags(),
+                               RenderBufferFlags::mappedOnceAtInitialization);
         int bufferCount = mappedOnceAtInitialization ? 1 : gpu::kBufferRingSize;
         wgpu::BufferDescriptor desc = {
             .usage = type() == RenderBufferType::index
@@ -1982,7 +1998,8 @@ protected:
         m_submittedBufferIdx =
             (m_submittedBufferIdx + 1) % gpu::kBufferRingSize;
         assert(m_buffers[m_submittedBufferIdx] != nullptr);
-        if (flags() & RenderBufferFlags::mappedOnceAtInitialization)
+        if (enums::is_flag_set(flags(),
+                               RenderBufferFlags::mappedOnceAtInitialization))
         {
             return m_buffers[m_submittedBufferIdx].GetMappedRange();
         }
@@ -1998,7 +2015,8 @@ protected:
 
     void onUnmap() override
     {
-        if (flags() & RenderBufferFlags::mappedOnceAtInitialization)
+        if (enums::is_flag_set(flags(),
+                               RenderBufferFlags::mappedOnceAtInitialization))
         {
             m_buffers[m_submittedBufferIdx].Unmap();
         }
@@ -2528,7 +2546,7 @@ wgpu::RenderPipeline RenderContextWebGPUImpl::makeDrawPipeline(
             topology = WGPUPrimitiveTopology_TriangleList;
             break;
         }
-        case DrawType::msaaStencilClipReset:
+        case DrawType::clipReset:
         case DrawType::interiorTriangulation:
         case DrawType::atlasBlit:
         {
@@ -3366,7 +3384,8 @@ void RenderContextWebGPUImpl::flush(const FlushDescriptor& desc)
                                  renderTarget->framebufferFormat())
                     .first->second;
 
-            if (loadActions & LoadStoreActionsEXT::clearColor)
+            if (enums::is_flag_set(loadActions,
+                                   LoadStoreActionsEXT::clearColor))
             {
                 void* uniformData =
                     m_loadStoreEXTUniforms->mapBuffer(sizeof(clearColor));
@@ -3413,7 +3432,7 @@ void RenderContextWebGPUImpl::flush(const FlushDescriptor& desc)
     {
         DrawType drawType = batch.drawType;
 
-        if (batch.barriers & gpu::BarrierFlags::dstBlend)
+        if (enums::is_flag_set(batch.barriers, gpu::BarrierFlags::dstBlend))
         {
             // For a dstBlend barrier, our only option in unextended WebGPU is
             // to copy out the dst pixels we want to read into a separate
@@ -3603,7 +3622,7 @@ void RenderContextWebGPUImpl::flush(const FlushDescriptor& desc)
                 break;
             }
 
-            case DrawType::msaaStencilClipReset:
+            case DrawType::clipReset:
             case DrawType::interiorTriangulation:
             case DrawType::atlasBlit:
             {

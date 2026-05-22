@@ -21,6 +21,8 @@ import 'package:rive_native/src/ffi/rive_event_ffi.dart';
 import 'package:rive_native/src/ffi/rive_ffi_reference.dart';
 import 'package:rive_native/src/ffi/rive_focus_ffi.dart';
 import 'package:rive_native/src/ffi/rive_renderer_ffi.dart';
+import 'package:rive_native/src/ffi/rive_semantic_ffi.dart';
+import 'package:rive_native/src/semantics/semantics_diff.dart';
 import 'package:rive_native/src/ffi/rive_luau_ffi.dart'
     show riveFileSetScriptingVM, LuauStateFFI;
 import 'package:rive_native/src/ffi/rive_text_ffi.dart';
@@ -1085,10 +1087,13 @@ void Function(Pointer<Void>, Pointer<NativeFunction<Void Function()>>)
             'setArtboardTransformDirtyCallback')
         .asFunction();
 
-final Pointer<Void> Function(Pointer<Void>, int index)
+final Pointer<Void> Function(
+        Pointer<Void>, int index, Pointer<Utf8> name, int propertyType)
     _viewModelInstancePropertyValue = nativeLib
-        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>, Uint64)>>(
-            'viewModelInstancePropertyValue')
+        .lookup<
+            NativeFunction<
+                Pointer<Void> Function(Pointer<Void>, Uint64, Pointer<Utf8>,
+                    Uint32)>>('viewModelInstancePropertyValue')
         .asFunction();
 final Pointer<NativeFunction<Void Function(Pointer<Void>)>>
     _deleteViewModelInstanceValueNative =
@@ -2880,6 +2885,23 @@ class FFIStateMachine extends StateMachine
   }
 
   @override
+  void enableSemantics() {
+    SemanticsFFI.enableSemantics(pointer);
+  }
+
+  @override
+  SemanticsDiff drainSemanticsDiff() => SemanticsFFI.drainDiff(pointer);
+
+  @override
+  bool focusSemanticNode(int semanticNodeId) =>
+      SemanticsFFI.requestFocus(pointer, semanticNodeId);
+
+  @override
+  void fireSemanticAction(int semanticNodeId, SemanticActionType actionType) {
+    SemanticsFFI.fireAction(pointer, semanticNodeId, actionType.index);
+  }
+
+  @override
   void internalBindViewModelInstance(InternalViewModelInstance instance) {
     _stateMachineDataContextFromInstance(
         pointer, (instance as FFIRiveInternalViewModelInstance).pointer);
@@ -3638,11 +3660,13 @@ class FFIRiveArtboard extends Artboard
 
   @override
   void internalBindViewModelInstance(InternalViewModelInstance instance,
-      InternalDataContext dataContext, bool isRoot) {
+      InternalDataContext? dataContext, bool isRoot) {
     _artboardDataContextFromInstance(
         pointer,
         (instance as FFIRiveInternalViewModelInstance).pointer,
-        (dataContext as FFIRiveInternalDataContext).pointer,
+        dataContext != null
+            ? (dataContext as FFIRiveInternalDataContext).pointer
+            : nullptr,
         isRoot);
   }
 
@@ -3838,69 +3862,91 @@ class FFIRiveInternalViewModelInstance extends InternalViewModelInstance
     return _pointer.address.toString();
   }
 
+  Pointer<Void> _propertyValuePointer(
+      int index, String name, int propertyType) {
+    final namePtr = name.toNativeUtf8();
+    try {
+      return _viewModelInstancePropertyValue(
+          pointer, index, namePtr, propertyType);
+    } finally {
+      malloc.free(namePtr);
+    }
+  }
+
   @override
-  InternalViewModelInstanceViewModel propertyViewModel(int index) {
-    final propertyPointer = _viewModelInstancePropertyValue(pointer, index);
+  InternalViewModelInstanceViewModel propertyViewModel(
+      int index, String name, int propertyType) {
+    final propertyPointer = _propertyValuePointer(index, name, propertyType);
     return FFIRiveInternalViewModelInstanceViewModel(propertyPointer);
   }
 
   @override
-  InternalViewModelInstanceNumber propertyNumber(int index) {
-    final propertyPointer = _viewModelInstancePropertyValue(pointer, index);
+  InternalViewModelInstanceNumber propertyNumber(
+      int index, String name, int propertyType) {
+    final propertyPointer = _propertyValuePointer(index, name, propertyType);
     return FFIInternalViewModelInstanceNumber(propertyPointer);
   }
 
   @override
-  InternalViewModelInstanceTrigger propertyTrigger(int index) {
-    final propertyPointer = _viewModelInstancePropertyValue(pointer, index);
+  InternalViewModelInstanceTrigger propertyTrigger(
+      int index, String name, int propertyType) {
+    final propertyPointer = _propertyValuePointer(index, name, propertyType);
     return FFIInternalViewModelInstanceTrigger(propertyPointer);
   }
 
   @override
-  InternalViewModelInstanceBoolean propertyBoolean(int index) {
-    final propertyPointer = _viewModelInstancePropertyValue(pointer, index);
+  InternalViewModelInstanceBoolean propertyBoolean(
+      int index, String name, int propertyType) {
+    final propertyPointer = _propertyValuePointer(index, name, propertyType);
     return FFIInternalViewModelInstanceBoolean(propertyPointer);
   }
 
   @override
-  InternalViewModelInstanceColor propertyColor(int index) {
-    final propertyPointer = _viewModelInstancePropertyValue(pointer, index);
+  InternalViewModelInstanceColor propertyColor(
+      int index, String name, int propertyType) {
+    final propertyPointer = _propertyValuePointer(index, name, propertyType);
     return FFIInternalViewModelInstanceColor(propertyPointer);
   }
 
   @override
-  InternalViewModelInstanceString propertyString(int index) {
-    final propertyPointer = _viewModelInstancePropertyValue(pointer, index);
+  InternalViewModelInstanceString propertyString(
+      int index, String name, int propertyType) {
+    final propertyPointer = _propertyValuePointer(index, name, propertyType);
     return FFIInternalViewModelInstanceString(propertyPointer);
   }
 
   @override
-  InternalViewModelInstanceEnum propertyEnum(int index) {
-    final propertyPointer = _viewModelInstancePropertyValue(pointer, index);
+  InternalViewModelInstanceEnum propertyEnum(
+      int index, String name, int propertyType) {
+    final propertyPointer = _propertyValuePointer(index, name, propertyType);
     return FFIInternalViewModelInstanceEnum(propertyPointer);
   }
 
   @override
-  InternalViewModelInstanceList propertyList(int index) {
-    final propertyPointer = _viewModelInstancePropertyValue(pointer, index);
+  InternalViewModelInstanceList propertyList(
+      int index, String name, int propertyType) {
+    final propertyPointer = _propertyValuePointer(index, name, propertyType);
     return FFIRiveInternalViewModelInstanceList(propertyPointer);
   }
 
   @override
-  InternalViewModelInstanceAsset propertyAsset(int index) {
-    final propertyPointer = _viewModelInstancePropertyValue(pointer, index);
+  InternalViewModelInstanceAsset propertyAsset(
+      int index, String name, int propertyType) {
+    final propertyPointer = _propertyValuePointer(index, name, propertyType);
     return FFIInternalViewModelInstanceAsset(propertyPointer);
   }
 
   @override
-  InternalViewModelInstanceSymbolListIndex propertySymbolListIndex(int index) {
-    final propertyPointer = _viewModelInstancePropertyValue(pointer, index);
+  InternalViewModelInstanceSymbolListIndex propertySymbolListIndex(
+      int index, String name, int propertyType) {
+    final propertyPointer = _propertyValuePointer(index, name, propertyType);
     return FFIInternalViewModelInstanceSymbolListIndex(propertyPointer);
   }
 
   @override
-  InternalViewModelInstanceArtboard propertyArtboard(int index) {
-    final propertyPointer = _viewModelInstancePropertyValue(pointer, index);
+  InternalViewModelInstanceArtboard propertyArtboard(
+      int index, String name, int propertyType) {
+    final propertyPointer = _propertyValuePointer(index, name, propertyType);
     return FFIInternalViewModelInstanceArtboard(propertyPointer);
   }
 

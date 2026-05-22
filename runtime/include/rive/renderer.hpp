@@ -5,7 +5,7 @@
 #ifndef _RIVE_RENDERER_HPP_
 #define _RIVE_RENDERER_HPP_
 
-#include "rive/enum_bitset.hpp"
+#include "rive/enums.hpp"
 #include "rive/shapes/paint/color.hpp"
 #include "rive/command_path.hpp"
 #include "rive/layout.hpp"
@@ -46,7 +46,6 @@ enum class RenderBufferFlags
         1 << 0, // The client will map the buffer exactly one time, before
                 // rendering, and will never update it again.
 };
-RIVE_MAKE_ENUM_BITSET(RenderBufferFlags)
 
 class RenderBuffer : public RefCnt<RenderBuffer>,
                      public ENABLE_LITE_RTTI(RenderBuffer)
@@ -187,8 +186,9 @@ public:
         addRenderPath(path->renderPath(), transform);
     }
 
-    virtual void addRenderPath(RenderPath* path, const Mat2D& transform) = 0;
-    virtual void addRenderPathBackwards(RenderPath* path,
+    virtual void addRenderPath(const RenderPath* path,
+                               const Mat2D& transform) = 0;
+    virtual void addRenderPathBackwards(const RenderPath* path,
                                         const Mat2D& transform)
     {
         // No-op on non rive renderer.

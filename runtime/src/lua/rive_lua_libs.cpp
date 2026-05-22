@@ -187,6 +187,9 @@ std::unordered_map<std::string, int16_t> atoms = {
     {"deviceId", (int16_t)LuaAtoms::deviceId},
     {"buttonMask", (int16_t)LuaAtoms::buttonMask},
     {"axis0", (int16_t)LuaAtoms::axis0},
+    {"remove", (int16_t)LuaAtoms::remove},
+    {"removeAt", (int16_t)LuaAtoms::removeAt},
+    {"removeAllOf", (int16_t)LuaAtoms::removeAllOf},
     {"audio", (int16_t)LuaAtoms::audio},
     {"play", (int16_t)LuaAtoms::play},
     {"playAtTime", (int16_t)LuaAtoms::playAtTime},
@@ -275,8 +278,20 @@ int rive_lua_pcall(lua_State* state, int nargs, int nresults)
     return context->pCall(state, nargs, nresults);
 }
 
+int rive_lua_pcall_with_context(lua_State* state,
+                                ScriptedObject* scriptedObject,
+                                int nargs,
+                                int nresults)
+{
+    ScriptingContext* context =
+        static_cast<ScriptingContext*>(lua_getthreaddata(state));
+    ScopedScriptedObjectContext scope(context, scriptedObject);
+    return context->pCall(state, nargs, nresults);
+}
+
 int rive_lua_pushRef(lua_State* state, int ref)
 {
+    lua_checkstack(state, 1);
     return lua_rawgeti(state, luaRegistryIndex, ref);
 }
 
@@ -411,6 +426,12 @@ ScriptingVM::~ScriptingVM() { lua_close(m_state); }
 
 void ScriptingVM::replaceContext(std::unique_ptr<ScriptingContext> newContext)
 {
+#ifdef WITH_RIVE_TOOLS
+    if (m_ownedContext != nullptr)
+    {
+        m_ownedContext->disposeOrphanScriptedProperties();
+    }
+#endif
     m_ownedContext = std::move(newContext);
     lua_setthreaddata(m_state, m_ownedContext.get());
 }
@@ -766,6 +787,35 @@ void ScriptingContext::clearGeneratorRefs() { m_assetGeneratorRefs.clear(); }
 bool ScriptingContext::hasGeneratorRef(uint32_t assetId) const
 {
     return m_assetGeneratorRefs.find(assetId) != m_assetGeneratorRefs.end();
+}
+
+void ScriptingContext::trackOrphanScriptedProperty(ScriptedProperty* property)
+{
+    if (property != nullptr)
+    {
+        m_orphanScriptedProperties.push_back(property);
+    }
+}
+
+void ScriptingContext::untrackOrphanScriptedProperty(ScriptedProperty* property)
+{
+    auto it = std::remove(m_orphanScriptedProperties.begin(),
+                          m_orphanScriptedProperties.end(),
+                          property);
+    m_orphanScriptedProperties.erase(it, m_orphanScriptedProperties.end());
+}
+
+void ScriptingContext::disposeOrphanScriptedProperties()
+{
+    auto orphans = m_orphanScriptedProperties;
+    for (ScriptedProperty* property : orphans)
+    {
+        if (property != nullptr)
+        {
+            property->dispose();
+        }
+    }
+    m_orphanScriptedProperties.clear();
 }
 #endif
 

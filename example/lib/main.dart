@@ -1,6 +1,13 @@
 import 'package:example/demos/hero_demo.dart';
 import 'package:example/demos/hunter_x.dart';
 import 'package:example/examples/data_binding_images.dart';
+import 'package:example/semantic/flutter/debugger.dart';
+import 'package:example/semantic/flutter/dropdown_list.dart';
+import 'package:example/semantic/flutter/lists.dart';
+import 'package:example/semantic/flutter/simpsons.dart';
+import 'package:example/semantic/rive/databinding_lists.dart';
+import 'package:example/semantic/rive/playground.dart';
+import 'package:example/semantic/rive/simpsons.dart';
 import 'package:flutter/material.dart';
 import 'package:rive_native/rive_native.dart' as rive;
 
@@ -22,14 +29,19 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final baseDarkTheme = ThemeData.dark();
     return MaterialApp(
       title: 'Flutter Demo',
       // showPerformanceOverlay: true,
       debugShowCheckedModeBanner: false,
-      darkTheme: ThemeData.dark().copyWith(
+      darkTheme: baseDarkTheme.copyWith(
         scaffoldBackgroundColor: _backgroundColor,
         appBarTheme: const AppBarTheme(backgroundColor: _appBarColor),
-        colorScheme: ColorScheme.fromSwatch().copyWith(primary: _primaryColor),
+        // Keep a true dark color scheme so text/icons stay readable.
+        colorScheme: baseDarkTheme.colorScheme.copyWith(
+          primary: _primaryColor,
+          surface: _backgroundColor,
+        ),
       ),
       themeMode: ThemeMode.dark,
       home: const HomePage(),
@@ -55,6 +67,15 @@ class _HomePageState extends State<HomePage> {
   List<Demo> widgets = [
     Demo(const HeroDemo(), "GDC Hero"),
     Demo(const HunterXDemo(), "Hunter X Demo"),
+    Demo(const SemanticDebuggerDemo(), "Semantic Debugger"),
+    Demo(const SemanticDemoRivePlayground(), "Semantic Rive Playground"),
+    Demo(const SemanticDemoRiveSimpsons(), "Semantic Rive Simpsons"),
+    Demo(const SemanticDemoFlutterSimpsons(), "Semantic Flutter Simpsons"),
+    Demo(const SemanticDemoFlutterLists(), "Semantic Flutter Lists"),
+    Demo(const SemanticDemoFlutterDropDownLists(),
+        "Semantic Flutter Dropdown List"),
+    Demo(const SemanticDemoRiveDatabindingLists(),
+        "Semantic Rive Databinding Lists"),
     Demo(const ExampleBasic(), "Basic"),
     Demo(const StabilityTest(), "Stability Test"),
     Demo(const ExampleDataBinding(), "Data Binding - Basics"),

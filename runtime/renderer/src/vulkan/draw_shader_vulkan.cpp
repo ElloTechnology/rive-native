@@ -20,7 +20,8 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
 
     const bool fixedFunctionColorOutput =
-        shaderMiscFlags & gpu::ShaderMiscFlags::fixedFunctionColorOutput;
+        enums::is_flag_set(shaderMiscFlags,
+                           gpu::ShaderMiscFlags::fixedFunctionColorOutput);
 
     if (type == Type::fragment && interlockMode == InterlockMode::msaa &&
         drawType != DrawType::renderPassInitialize &&
@@ -76,7 +77,7 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
                 case DrawType::msaaMidpointFanPathsStencil:
                 case DrawType::msaaMidpointFanPathsCover:
                 case DrawType::msaaOuterCubics:
-                case DrawType::msaaStencilClipReset:
+                case DrawType::clipReset:
                 case DrawType::renderPassInitialize:
                     RIVE_UNREACHABLE();
             }
@@ -130,8 +131,9 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
                     break;
 
                 case DrawType::renderPassResolve:
-                    if (shaderMiscFlags &
-                        gpu::ShaderMiscFlags::coalescedResolveAndTransfer)
+                    if (enums::is_flag_set(
+                            shaderMiscFlags,
+                            gpu::ShaderMiscFlags::coalescedResolveAndTransfer))
                     {
                         vertCode = spirv::atomic_resolve_coalesced_vert;
                         fragCode = spirv::atomic_resolve_coalesced_frag;
@@ -152,7 +154,7 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
                 case DrawType::msaaMidpointFanPathsStencil:
                 case DrawType::msaaMidpointFanPathsCover:
                 case DrawType::msaaOuterCubics:
-                case DrawType::msaaStencilClipReset:
+                case DrawType::clipReset:
                 case DrawType::renderPassInitialize:
                     RIVE_UNREACHABLE();
             }
@@ -169,7 +171,8 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
                 case DrawType::outerCurvePatches:
                     vertCode = spirv::draw_clockwise_path_vert;
                     fragCode =
-                        (shaderMiscFlags & gpu::ShaderMiscFlags::clipUpdateOnly)
+                        enums::is_flag_set(shaderMiscFlags,
+                                           gpu::ShaderMiscFlags::clipUpdateOnly)
                             ? fixedFunctionColorOutput
                                   ? spirv::draw_clockwise_clip_fixedcolor_frag
                                   : spirv::draw_clockwise_clip_frag
@@ -181,13 +184,14 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
                 case DrawType::interiorTriangulation:
                     vertCode = spirv::draw_clockwise_interior_triangles_vert;
                     fragCode =
-                        (shaderMiscFlags & gpu::ShaderMiscFlags::clipUpdateOnly)
+                        enums::is_flag_set(shaderMiscFlags,
+                                           gpu::ShaderMiscFlags::clipUpdateOnly)
                             ? fixedFunctionColorOutput
                                   ? spirv::
-                                        draw_clockwise_interior_triangles_clip_fixedcolor_frag
+                                        draw_clockwise_clip_interior_triangles_fixedcolor_frag
 
                                   : spirv::
-                                        draw_clockwise_interior_triangles_clip_frag
+                                        draw_clockwise_clip_interior_triangles_frag
                         : fixedFunctionColorOutput
                             ? spirv::
                                   draw_clockwise_interior_triangles_fixedcolor_frag
@@ -218,7 +222,7 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
                 case DrawType::msaaMidpointFanPathsStencil:
                 case DrawType::msaaMidpointFanPathsCover:
                 case DrawType::msaaOuterCubics:
-                case DrawType::msaaStencilClipReset:
+                case DrawType::clipReset:
                 case DrawType::renderPassResolve:
                 case DrawType::renderPassInitialize:
                     RIVE_UNREACHABLE();
@@ -235,51 +239,86 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
             // clockwiseAtomic mode, we can swap out the "_fixedcolor" shader
             // variants on a per-draw basis instead of per render pass.
             const bool drawUsesAdvancedBlend =
-                shaderFeatures & gpu::ShaderFeatures::ENABLE_ADVANCED_BLEND;
+                enums::is_flag_set(shaderFeatures,
+                                   gpu::ShaderFeatures::ENABLE_ADVANCED_BLEND);
             switch (drawType)
             {
                 case DrawType::midpointFanPatches:
                 case DrawType::midpointFanCenterAAPatches:
                 case DrawType::outerCurvePatches:
                     vertCode = spirv::draw_clockwise_atomic_path_vert;
-                    if (shaderMiscFlags &
-                        gpu::ShaderMiscFlags::borrowedCoveragePass)
+                    if (enums::is_flag_set(
+                            shaderMiscFlags,
+                            gpu::ShaderMiscFlags::borrowedCoveragePass))
                     {
+                        assert(fixedFunctionColorOutput);
+                        assert(!enums::any_flag_set(
+                            shaderMiscFlags,
+                            gpu::ShaderMiscFlags::clipUpdateOnly |
+                                gpu::ShaderMiscFlags::nestedClipUpdateOnly));
                         assert(!drawUsesAdvancedBlend);
-                        fragCode = spirv::
-                            draw_clockwise_atomic_path_borrowed_coverage_frag;
-                    }
-                    else if (!drawUsesAdvancedBlend)
-                    {
-
                         fragCode =
-                            spirv::draw_clockwise_atomic_path_fixedcolor_frag;
+                            spirv::draw_clockwise_atomic_borrowed_coverage_frag;
+                    }
+                    else if (enums::any_flag_set(
+                                 shaderMiscFlags,
+                                 gpu::ShaderMiscFlags::clipUpdateOnly |
+                                     gpu::ShaderMiscFlags::
+                                         nestedClipUpdateOnly))
+                    {
+                        fragCode =
+                            !drawUsesAdvancedBlend
+                                ? spirv::
+                                      draw_clockwise_atomic_clip_fixedcolor_frag
+                                : spirv::draw_clockwise_atomic_clip_frag;
                     }
                     else
                     {
-                        fragCode = spirv::draw_clockwise_atomic_path_frag;
+                        fragCode =
+                            !drawUsesAdvancedBlend
+                                ? spirv::
+                                      draw_clockwise_atomic_path_fixedcolor_frag
+                                : spirv::draw_clockwise_atomic_path_frag;
                     }
                     break;
 
                 case DrawType::interiorTriangulation:
                     vertCode =
                         spirv::draw_clockwise_atomic_interior_triangles_vert;
-                    if (shaderMiscFlags &
-                        gpu::ShaderMiscFlags::borrowedCoveragePass)
+                    if (enums::is_flag_set(
+                            shaderMiscFlags,
+                            gpu::ShaderMiscFlags::borrowedCoveragePass))
                     {
+                        assert(fixedFunctionColorOutput);
+                        assert(!enums::any_flag_set(
+                            shaderMiscFlags,
+                            gpu::ShaderMiscFlags::clipUpdateOnly |
+                                gpu::ShaderMiscFlags::nestedClipUpdateOnly));
                         assert(!drawUsesAdvancedBlend);
                         fragCode = spirv::
-                            draw_clockwise_atomic_interior_triangles_borrowed_coverage_frag;
+                            draw_clockwise_atomic_borrowed_coverage_interior_triangles_frag;
                     }
-                    else if (!drawUsesAdvancedBlend)
+                    else if (enums::any_flag_set(
+                                 shaderMiscFlags,
+                                 gpu::ShaderMiscFlags::clipUpdateOnly |
+                                     gpu::ShaderMiscFlags::
+                                         nestedClipUpdateOnly))
                     {
-                        fragCode = spirv::
-                            draw_clockwise_atomic_interior_triangles_fixedcolor_frag;
+                        fragCode =
+                            !drawUsesAdvancedBlend
+                                ? spirv::
+                                      draw_clockwise_atomic_clip_interior_triangles_fixedcolor_frag
+                                : spirv::
+                                      draw_clockwise_atomic_clip_interior_triangles_frag;
                     }
                     else
                     {
-                        fragCode = spirv::
-                            draw_clockwise_atomic_interior_triangles_frag;
+                        fragCode =
+                            !drawUsesAdvancedBlend
+                                ? spirv::
+                                      draw_clockwise_atomic_interior_triangles_fixedcolor_frag
+                                : spirv::
+                                      draw_clockwise_atomic_interior_triangles_frag;
                     }
                     break;
 
@@ -301,9 +340,21 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
                             : spirv::draw_clockwise_atomic_image_mesh_frag;
                     break;
 
+                case DrawType::clipReset:
+                    vertCode = spirv::clear_clockwise_atomic_clip_vert;
+                    fragCode =
+                        !drawUsesAdvancedBlend
+                            ? spirv::clear_clockwise_atomic_clip_fixedcolor_frag
+                            : spirv::clear_clockwise_atomic_clip_frag;
+                    break;
+
                 case DrawType::renderPassInitialize:
                     vertCode = spirv::draw_fullscreen_quad_vert;
-                    fragCode = spirv::draw_input_attachment_frag;
+                    fragCode =
+                        fixedFunctionColorOutput
+                            ? spirv::
+                                  init_clockwise_atomic_workaround_fixedcolor_frag
+                            : spirv::init_clockwise_atomic_workaround_frag;
                     break;
 
                 case DrawType::imageRect:
@@ -314,7 +365,6 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
                 case DrawType::msaaMidpointFanPathsStencil:
                 case DrawType::msaaMidpointFanPathsCover:
                 case DrawType::msaaOuterCubics:
-                case DrawType::msaaStencilClipReset:
                 case DrawType::renderPassResolve:
                     RIVE_UNREACHABLE();
             }
@@ -338,7 +388,8 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
                 case DrawType::msaaMidpointFanPathsStencil:
                 case DrawType::msaaMidpointFanPathsCover:
                     vertCode =
-                        (shaderFeatures & ShaderFeatures::ENABLE_CLIP_RECT)
+                        enums::is_flag_set(shaderFeatures,
+                                           ShaderFeatures::ENABLE_CLIP_RECT)
                             ? spirv::draw_msaa_path_vert
                             : spirv::draw_msaa_path_noclipdistance_vert;
                     fragCode = fixedFunctionColorOutput
@@ -346,7 +397,7 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
                                    : spirv::draw_msaa_path_frag;
                     break;
 
-                case DrawType::msaaStencilClipReset:
+                case DrawType::clipReset:
                     vertCode = spirv::draw_msaa_stencil_vert;
                     fragCode = spirv::draw_msaa_stencil_frag;
                     break;
@@ -358,7 +409,8 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
 
                 case DrawType::atlasBlit:
                     vertCode =
-                        (shaderFeatures & ShaderFeatures::ENABLE_CLIP_RECT)
+                        enums::is_flag_set(shaderFeatures,
+                                           ShaderFeatures::ENABLE_CLIP_RECT)
                             ? spirv::draw_msaa_atlas_blit_vert
                             : spirv::draw_msaa_atlas_blit_noclipdistance_vert;
                     fragCode = fixedFunctionColorOutput
@@ -368,7 +420,8 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
 
                 case DrawType::imageMesh:
                     vertCode =
-                        (shaderFeatures & ShaderFeatures::ENABLE_CLIP_RECT)
+                        enums::is_flag_set(shaderFeatures,
+                                           ShaderFeatures::ENABLE_CLIP_RECT)
                             ? spirv::draw_msaa_image_mesh_vert
                             : spirv::draw_msaa_image_mesh_noclipdistance_vert;
                     fragCode = fixedFunctionColorOutput

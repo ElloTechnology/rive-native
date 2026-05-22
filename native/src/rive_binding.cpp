@@ -27,6 +27,8 @@
 #include "rive/viewmodel/viewmodel_instance_trigger.hpp"
 #include "rive/viewmodel/viewmodel_instance_symbol_list_index.hpp"
 #include "rive/viewmodel/viewmodel_instance_asset_image.hpp"
+#include "rive/viewmodel/viewmodel_property_enum.hpp"
+#include "rive/viewmodel/viewmodel_property_enum_custom.hpp"
 #include "rive/math/transform_components.hpp"
 #include "rive/node.hpp"
 #include "rive/constraints/constraint.hpp"
@@ -63,6 +65,8 @@
 #include "rive/input/focusable.hpp"
 #include "rive/input/focus_manager.hpp"
 #include "rive/math/aabb.hpp"
+#include "rive/semantic/semantic_manager.hpp"
+#include "rive/semantic/semantic_snapshot.hpp"
 #include <mutex>
 #include <unordered_map>
 
@@ -1963,6 +1967,10 @@ EXPORT DataContext* riveDataContext(File* file,
         return nullptr;
     }
     auto instance = file->createViewModelInstance(index, indexInstance);
+    if (instance == nullptr)
+    {
+        return nullptr;
+    }
     auto dataContext = new DataContext(instance);
     return dataContext;
 }
@@ -2013,8 +2021,7 @@ EXPORT void artboardDataContextFromInstance(
     DataContext* dataContext,
     bool isRoot)
 {
-    if (wrappedArtboard == nullptr || dataContext == nullptr ||
-        viewModelInstance == nullptr)
+    if (wrappedArtboard == nullptr || viewModelInstance == nullptr)
     {
         return;
     }
@@ -2101,16 +2108,67 @@ EXPORT void stateMachineDataContext(WrappedStateMachine* wrappedMachine,
 
 EXPORT ViewModelInstanceValue* viewModelInstancePropertyValue(
     ViewModelInstance* viewModelInstance,
-    SizeType index)
+    SizeType index,
+    const char* name,
+    uint32_t propertyType)
 {
-    if (viewModelInstance == nullptr)
+    if (viewModelInstance == nullptr || name == nullptr)
     {
         return nullptr;
     }
-    auto ptr = viewModelInstance->propertyValue(index);
+
+    std::string nameStr(name);
+    auto propertyValues = viewModelInstance->propertyValues();
+
+    // Collect all property values whose name matches AND whose associated
+    // ViewModelProperty coreType matches the requested propertyType.
+    std::vector<std::pair<size_t, ViewModelInstanceValue*>> matches;
+    for (size_t i = 0; i < propertyValues.size(); i++)
+    {
+        auto* value = propertyValues[i].get();
+        if (value == nullptr)
+        {
+            continue;
+        }
+        auto* prop = value->viewModelProperty();
+        if (prop != nullptr && prop->constName() == nameStr)
+        {
+            // Enums are treated as a special case because they get converted
+            // during export
+            if (prop->coreType() == propertyType ||
+                (prop->coreType() == ViewModelPropertyEnumCustomBase::typeKey &&
+                 propertyType == ViewModelPropertyEnumBase::typeKey))
+                matches.push_back({i, value});
+        }
+    }
+
+    ViewModelInstanceValue* result = nullptr;
+    if (matches.size() == 1)
+    {
+        result = matches[0].second;
+    }
+    else if (matches.size() > 1)
+    {
+        // Multiple matches — break the tie using the provided index.
+        result = matches[0].second;
+        for (auto& [idx, value] : matches)
+        {
+            if (idx == index)
+            {
+                result = value;
+                break;
+            }
+        }
+    }
+
+    if (result == nullptr)
+    {
+        return nullptr;
+    }
+
     // Make sure to increase ref count and release as propertyValue returns a
     // bare pointer.
-    return ref_rcp(ptr).release();
+    return ref_rcp(result).release();
 }
 
 EXPORT void deleteViewModelInstance(ViewModelInstance* viewModelInstance)
@@ -2177,7 +2235,8 @@ EXPORT void setViewModelInstanceNumberValue(
     ViewModelInstanceValue* viewModelInstanceValue,
     float value)
 {
-    if (viewModelInstanceValue == nullptr)
+    if (viewModelInstanceValue == nullptr ||
+        !viewModelInstanceValue->is<ViewModelInstanceNumber>())
     {
         return;
     }
@@ -2190,7 +2249,8 @@ EXPORT void setViewModelInstanceTriggerValue(
     ViewModelInstanceValue* viewModelInstanceValue,
     uint32_t value)
 {
-    if (viewModelInstanceValue == nullptr)
+    if (viewModelInstanceValue == nullptr ||
+        !viewModelInstanceValue->is<ViewModelInstanceTrigger>())
     {
         return;
     }
@@ -2203,7 +2263,8 @@ EXPORT void setViewModelInstanceEnumValue(
     ViewModelInstanceValue* viewModelInstanceValue,
     uint32_t value)
 {
-    if (viewModelInstanceValue == nullptr)
+    if (viewModelInstanceValue == nullptr ||
+        !viewModelInstanceValue->is<ViewModelInstanceEnum>())
     {
         return;
     }
@@ -2216,7 +2277,8 @@ EXPORT void setViewModelInstanceAssetValue(
     ViewModelInstanceValue* viewModelInstanceValue,
     uint32_t value)
 {
-    if (viewModelInstanceValue == nullptr)
+    if (viewModelInstanceValue == nullptr ||
+        !viewModelInstanceValue->is<ViewModelInstanceAssetImage>())
     {
         return;
     }
@@ -2229,7 +2291,8 @@ EXPORT void setViewModelInstanceBooleanValue(
     ViewModelInstanceValue* viewModelInstanceValue,
     bool value)
 {
-    if (viewModelInstanceValue == nullptr)
+    if (viewModelInstanceValue == nullptr ||
+        !viewModelInstanceValue->is<ViewModelInstanceBoolean>())
     {
         return;
     }
@@ -2242,7 +2305,8 @@ EXPORT void setViewModelInstanceColorValue(
     ViewModelInstanceValue* viewModelInstanceValue,
     int value)
 {
-    if (viewModelInstanceValue == nullptr)
+    if (viewModelInstanceValue == nullptr ||
+        !viewModelInstanceValue->is<ViewModelInstanceColor>())
     {
         return;
     }
@@ -2255,16 +2319,13 @@ EXPORT void setViewModelInstanceStringValue(
     ViewModelInstanceValue* viewModelInstance,
     const char* value)
 {
-    if (viewModelInstance == nullptr)
+    if (viewModelInstance == nullptr ||
+        !viewModelInstance->is<ViewModelInstanceString>())
     {
         return;
     }
     auto viewModelInstanceString =
         viewModelInstance->as<ViewModelInstanceString>();
-    if (viewModelInstanceString == nullptr)
-    {
-        return;
-    }
     // Copy string so we never hold the Dart-allocated pointer; avoids
     // use-after-free if Dart frees the buffer after this returns.
     std::string valueCopy(value != nullptr ? value : "");
@@ -2275,7 +2336,8 @@ EXPORT void setViewModelInstanceSymbolListIndexValue(
     ViewModelInstanceValue* viewModelInstance,
     uint32_t value)
 {
-    if (viewModelInstance == nullptr)
+    if (viewModelInstance == nullptr ||
+        !viewModelInstance->is<ViewModelInstanceSymbolListIndex>())
     {
         return;
     }
@@ -2288,7 +2350,8 @@ EXPORT void setViewModelInstanceArtboardValue(
     ViewModelInstanceValue* viewModelInstance,
     uint32_t value)
 {
-    if (viewModelInstance == nullptr)
+    if (viewModelInstance == nullptr ||
+        !viewModelInstance->is<ViewModelInstanceArtboard>())
     {
         return;
     }
@@ -2301,7 +2364,8 @@ EXPORT void setViewModelInstanceViewModelValue(
     ViewModelInstanceValue* viewModelInstanceValue,
     ViewModelInstance* viewModelInstance)
 {
-    if (viewModelInstance == nullptr || viewModelInstanceValue == nullptr)
+    if (viewModelInstance == nullptr || viewModelInstanceValue == nullptr ||
+        !viewModelInstanceValue->is<ViewModelInstanceViewModel>())
     {
         return;
     }
@@ -2315,7 +2379,8 @@ EXPORT void setViewModelInstanceListValue(
     ViewModelInstance* const* instances,
     size_t count)
 {
-    if (viewModelInstanceValue == nullptr)
+    if (viewModelInstanceValue == nullptr ||
+        !viewModelInstanceValue->is<ViewModelInstanceList>())
     {
         return;
     }
@@ -5668,6 +5733,16 @@ EXPORT void rawTextInputSetText(RawTextInput* rawTextInput, const char* value)
     rawTextInput->text(value);
 }
 
+EXPORT void rawTextInputSetTextPreserveCursor(RawTextInput* rawTextInput,
+                                              const char* value)
+{
+    if (rawTextInput == nullptr)
+    {
+        return;
+    }
+    rawTextInput->textPreserveCursor(value);
+}
+
 EXPORT const char* rawTextInputGetText(RawTextInput* rawTextInput)
 {
     if (rawTextInput == nullptr)
@@ -6983,6 +7058,329 @@ EXPORT void stateMachineSetExternalFocusManager(
     if (wrappedMachine == nullptr)
         return;
     wrappedMachine->stateMachine()->setExternalFocusManager(focusManager);
+}
+
+// ============================================================
+// Semantics diff FFI
+// ============================================================
+
+struct SemanticsDiffNodeFFI
+{
+    uint32_t id;
+    uint32_t role;
+    const char* label; // null-terminated, valid until freeSemanticDiff
+    const char* value; // null-terminated, valid until freeSemanticDiff
+    const char* hint;  // null-terminated, valid until freeSemanticDiff
+    uint32_t stateFlags;
+    uint32_t traitFlags;
+    float minX, minY, maxX, maxY;
+    int32_t parentId;
+    uint32_t siblingIndex;
+    uint32_t headingLevel;
+};
+
+struct SemanticsChildrenUpdateFFI
+{
+    int32_t parentId;
+    const uint32_t* childIds;
+    uint32_t childCount;
+};
+
+struct SemanticsBoundsUpdateFFI
+{
+    uint32_t id;
+    float minX, minY, maxX, maxY;
+};
+
+struct SemanticsDiffFFI
+{
+    uint64_t treeVersion;
+    uint32_t frameNumber;
+    uint32_t rootId;
+
+    const SemanticsDiffNodeFFI* added;
+    uint32_t addedCount;
+    const uint32_t* removed;
+
+    uint32_t removedCount;
+    const SemanticsDiffNodeFFI* moved;
+    uint32_t movedCount;
+    const SemanticsDiffNodeFFI* updatedSemantic;
+    uint32_t updatedSemanticCount;
+    const SemanticsBoundsUpdateFFI* updatedGeometry;
+    uint32_t updatedGeometryCount;
+    const SemanticsChildrenUpdateFFI* childrenUpdated;
+    uint32_t childrenUpdatedCount;
+};
+
+// Pointer-free structs have identical layout on 32-bit WASM and 64-bit native,
+// so this assert is universal.
+static_assert(sizeof(SemanticsBoundsUpdateFFI) == 20,
+              "SemanticsBoundsUpdateFFI must match Dart/WASM readers");
+
+// Structs containing pointers differ between 32-bit WASM and 64-bit native.
+// The Dart-side layout is hand-maintained in two places:
+//   - rive_semantic_web.dart (WASM): hardcoded DataView offsets for 32-bit.
+//   - rive_semantic_ffi.dart (native): @Struct fields that Dart FFI lays out
+//     per the host C ABI.
+// Dart does NOT validate either layout against the C side at link time, so we
+// assert the C struct sizes here as a tripwire: if a field is added/reordered
+// in C++ without a matching edit to the Dart mirror, the C++ build fails
+// loudly instead of silently returning wrong field values at runtime.
+#if defined(__EMSCRIPTEN__)
+static_assert(
+    sizeof(SemanticsDiffNodeFFI) == 56,
+    "WASM SemanticsDiffNodeFFI layout drifted from rive_semantic_web.dart");
+static_assert(
+    sizeof(SemanticsChildrenUpdateFFI) == 12,
+    "WASM SemanticsChildrenUpdateFFI layout drifted from rive_semantic_web.dart");
+static_assert(
+    sizeof(SemanticsDiffFFI) == 64,
+    "WASM SemanticsDiffFFI layout drifted from rive_semantic_web.dart");
+#elif UINTPTR_MAX == UINT64_MAX
+// 64-bit native (LP64/LLP64). 32-bit native is not exercised; if ever
+// added, verify sizes against rive_semantic_ffi.dart and add a branch.
+static_assert(
+    sizeof(SemanticsDiffNodeFFI) == 72,
+    "Native SemanticsDiffNodeFFI layout drifted from rive_semantic_ffi.dart");
+static_assert(
+    sizeof(SemanticsChildrenUpdateFFI) == 24,
+    "Native SemanticsChildrenUpdateFFI layout drifted from rive_semantic_ffi.dart");
+static_assert(
+    sizeof(SemanticsDiffFFI) == 112,
+    "Native SemanticsDiffFFI layout drifted from rive_semantic_ffi.dart");
+#endif
+
+// Null-on-empty avoids allocating a 1-byte "\0" buffer for every empty
+// value/hint; the Dart/WASM decoders map nullptr to ''.
+static const char* toCStringOrNull(const std::string& s)
+{
+    return s.empty() ? nullptr : toCString(s);
+}
+
+static SemanticsDiffNodeFFI toSemanticsDiffNodeFFI(
+    const SemanticsDiffNode& node)
+{
+    SemanticsDiffNodeFFI ffi;
+    ffi.id = node.id;
+    ffi.role = node.role;
+    ffi.label = toCStringOrNull(node.label);
+    ffi.value = toCStringOrNull(node.value);
+    ffi.hint = toCStringOrNull(node.hint);
+    ffi.stateFlags = node.stateFlags;
+    ffi.traitFlags = node.traitFlags;
+    ffi.minX = node.minX;
+    ffi.minY = node.minY;
+    ffi.maxX = node.maxX;
+    ffi.maxY = node.maxY;
+    ffi.parentId = node.parentId;
+    ffi.siblingIndex = node.siblingIndex;
+    ffi.headingLevel = node.headingLevel;
+    return ffi;
+}
+
+static SemanticsDiffFFI* toSemanticsDiffFFI(const SemanticsDiff& diff)
+{
+    auto* ffi = new SemanticsDiffFFI();
+    ffi->treeVersion = diff.treeVersion;
+    ffi->frameNumber = static_cast<uint32_t>(diff.frameNumber);
+    ffi->rootId = diff.rootId;
+
+    // added
+    ffi->addedCount = static_cast<uint32_t>(diff.added.size());
+    if (ffi->addedCount > 0)
+    {
+        auto* arr = new SemanticsDiffNodeFFI[ffi->addedCount];
+        for (uint32_t i = 0; i < ffi->addedCount; ++i)
+            arr[i] = toSemanticsDiffNodeFFI(diff.added[i]);
+        ffi->added = arr;
+    }
+    else
+    {
+        ffi->added = nullptr;
+    }
+
+    // removed
+    ffi->removedCount = static_cast<uint32_t>(diff.removed.size());
+    if (ffi->removedCount > 0)
+    {
+        auto* arr = new uint32_t[ffi->removedCount];
+        for (uint32_t i = 0; i < ffi->removedCount; ++i)
+        {
+            arr[i] = diff.removed[i];
+        }
+        ffi->removed = arr;
+    }
+    else
+    {
+        ffi->removed = nullptr;
+    }
+
+    // moved
+    ffi->movedCount = static_cast<uint32_t>(diff.moved.size());
+    if (ffi->movedCount > 0)
+    {
+        auto* arr = new SemanticsDiffNodeFFI[ffi->movedCount];
+        for (uint32_t i = 0; i < ffi->movedCount; ++i)
+            arr[i] = toSemanticsDiffNodeFFI(diff.moved[i]);
+        ffi->moved = arr;
+    }
+    else
+    {
+        ffi->moved = nullptr;
+    }
+
+    // updatedSemantic
+    ffi->updatedSemanticCount =
+        static_cast<uint32_t>(diff.updatedSemantic.size());
+    if (ffi->updatedSemanticCount > 0)
+    {
+        auto* arr = new SemanticsDiffNodeFFI[ffi->updatedSemanticCount];
+        for (uint32_t i = 0; i < ffi->updatedSemanticCount; ++i)
+            arr[i] = toSemanticsDiffNodeFFI(diff.updatedSemantic[i]);
+        ffi->updatedSemantic = arr;
+    }
+    else
+    {
+        ffi->updatedSemantic = nullptr;
+    }
+
+    // updatedGeometry
+    ffi->updatedGeometryCount =
+        static_cast<uint32_t>(diff.updatedGeometry.size());
+    if (ffi->updatedGeometryCount > 0)
+    {
+        auto* arr = new SemanticsBoundsUpdateFFI[ffi->updatedGeometryCount];
+        for (uint32_t i = 0; i < ffi->updatedGeometryCount; ++i)
+        {
+            const auto& b = diff.updatedGeometry[i];
+            arr[i].id = b.id;
+            arr[i].minX = b.minX;
+            arr[i].minY = b.minY;
+            arr[i].maxX = b.maxX;
+            arr[i].maxY = b.maxY;
+        }
+        ffi->updatedGeometry = arr;
+    }
+    else
+    {
+        ffi->updatedGeometry = nullptr;
+    }
+
+    // childrenUpdated
+    ffi->childrenUpdatedCount =
+        static_cast<uint32_t>(diff.childrenUpdated.size());
+    if (ffi->childrenUpdatedCount > 0)
+    {
+        auto* arr = new SemanticsChildrenUpdateFFI[ffi->childrenUpdatedCount];
+        for (uint32_t i = 0; i < ffi->childrenUpdatedCount; ++i)
+        {
+            const auto& cu = diff.childrenUpdated[i];
+            arr[i].parentId = cu.parentId;
+            arr[i].childCount = static_cast<uint32_t>(cu.childIds.size());
+            if (arr[i].childCount > 0)
+            {
+                auto* ids = new uint32_t[arr[i].childCount];
+                for (uint32_t j = 0; j < arr[i].childCount; ++j)
+                    ids[j] = cu.childIds[j];
+                arr[i].childIds = ids;
+            }
+            else
+            {
+                arr[i].childIds = nullptr;
+            }
+        }
+        ffi->childrenUpdated = arr;
+    }
+    else
+    {
+        ffi->childrenUpdated = nullptr;
+    }
+
+    return ffi;
+}
+
+EXPORT void stateMachineEnableSemantics(WrappedStateMachine* wrappedMachine)
+{
+    if (wrappedMachine == nullptr)
+        return;
+    wrappedMachine->stateMachine()->enableSemantics();
+}
+
+EXPORT SemanticsDiffFFI* stateMachineDrainSemanticsDiff(
+    WrappedStateMachine* wrappedMachine)
+{
+    if (wrappedMachine == nullptr)
+        return nullptr;
+    auto* manager = wrappedMachine->stateMachine()->semanticManager();
+    if (manager == nullptr)
+        return nullptr;
+    auto diff = manager->drainDiff();
+    if (diff.empty())
+        return nullptr;
+    return toSemanticsDiffFFI(diff);
+}
+
+EXPORT bool stateMachineFocusSemanticNode(WrappedStateMachine* wrappedMachine,
+                                          uint32_t semanticNodeId)
+{
+    if (wrappedMachine == nullptr)
+        return false;
+    auto* manager = wrappedMachine->stateMachine()->semanticManager();
+    if (manager == nullptr)
+        return false;
+    return manager->requestFocus(semanticNodeId);
+}
+
+EXPORT void stateMachineFireSemanticAction(WrappedStateMachine* wrappedMachine,
+                                           uint32_t semanticNodeId,
+                                           uint8_t actionType)
+{
+    if (wrappedMachine == nullptr)
+        return;
+    wrappedMachine->stateMachine()->fireSemanticAction(
+        semanticNodeId,
+        static_cast<rive::SemanticActionType>(actionType));
+}
+
+EXPORT void freeSemanticDiff(SemanticsDiffFFI* diff)
+{
+    if (diff == nullptr)
+        return;
+
+    auto freeNodes = [](const SemanticsDiffNodeFFI* arr, uint32_t count) {
+        if (arr == nullptr)
+            return;
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            // Strings were allocated by toCString (malloc), free with std::free
+            if (arr[i].label != nullptr)
+                std::free((void*)arr[i].label);
+            if (arr[i].value != nullptr)
+                std::free((void*)arr[i].value);
+            if (arr[i].hint != nullptr)
+                std::free((void*)arr[i].hint);
+        }
+        delete[] arr;
+    };
+
+    freeNodes(diff->added, diff->addedCount);
+    delete[] diff->removed;
+    freeNodes(diff->moved, diff->movedCount);
+    freeNodes(diff->updatedSemantic, diff->updatedSemanticCount);
+    // updatedGeometry is POD (no heap strings) — simple delete[] suffices.
+    delete[] diff->updatedGeometry;
+
+    if (diff->childrenUpdated != nullptr)
+    {
+        for (uint32_t i = 0; i < diff->childrenUpdatedCount; ++i)
+        {
+            delete[] diff->childrenUpdated[i].childIds;
+        }
+        delete[] diff->childrenUpdated;
+    }
+
+    delete diff;
 }
 
 #ifdef __EMSCRIPTEN__

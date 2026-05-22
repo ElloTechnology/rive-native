@@ -23,9 +23,9 @@ PLS_MAIN(@drawFragmentMain)
 {
     VARYING_UNPACK(v_paint, float4);
 #ifdef @DRAW_INTERIOR_TRIANGLES
-    VARYING_INIT(v_windingWeight, half);
+    VARYING_UNPACK(v_windingWeight, half);
 #else
-    VARYING_INIT(v_coverages, COVERAGE_TYPE);
+    VARYING_UNPACK(v_coverages, COVERAGE_TYPE);
 #endif //@DRAW_INTERIOR_TRIANGLES
     VARYING_UNPACK(v_pathID, half);
 #ifdef @ENABLE_CLIPPING
@@ -60,7 +60,7 @@ PLS_MAIN(@drawFragmentMain)
         // Calculate the clip rect before entering the interlock.
         if (@ENABLE_CLIP_RECT)
         {
-            half clipRectMin = min_value(cast_float4_to_half4(v_clipRect));
+            half clipRectMin = min_component(cast_float4_to_half4(v_clipRect));
             maxCoverage = min(clipRectMin, maxCoverage);
         }
 #endif
@@ -244,8 +244,10 @@ PLS_MAIN(@drawFragmentMain)
 
 #ifdef @FIXED_FUNCTION_COLOR_OUTPUT
     _fragColor = paintColor;
-#endif
+    EMIT_PLS_AND_FRAG_COLOR
+#else
     EMIT_PLS;
+#endif
 }
 
 #endif // @FRAGMENT

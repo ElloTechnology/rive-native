@@ -1,3 +1,5 @@
+// ignore_for_file: experimental_member_use
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:rive_native/rive_native.dart' as rive;
@@ -20,6 +22,8 @@ class RivePlayer extends StatefulWidget {
     this.withViewModelInstance,
     this.assetLoader,
     this.autoBind = true,
+    this.semanticsEnabled = false,
+    this.withPainter,
   });
   final String asset;
   final String? stateMachineName;
@@ -32,10 +36,15 @@ class RivePlayer extends StatefulWidget {
   final rive.AssetLoaderCallback? assetLoader;
   final bool autoBind;
 
+  /// When true, wraps the Rive widget with [rive.RiveSemanticsWidget] to
+  /// enable screen reader accessibility support.
+  final bool semanticsEnabled;
+
   final void Function(rive.StateMachine stateMachine)? withStateMachine;
   final void Function(rive.Artboard artboard)? withArtboard;
   final void Function(rive.ViewModelInstance viewModelInstance)?
       withViewModelInstance;
+  final void Function(rive.StateMachinePainter painter)? withPainter;
 
   @override
   State<RivePlayer> createState() => _RivePlayerState();
@@ -87,6 +96,7 @@ class _RivePlayerState extends State<RivePlayer> {
       ..alignment = widget.alignment
       ..layoutScaleFactor = widget.layoutScaleFactor;
 
+    widget.withPainter?.call(stateMachinePainter);
     setState(() {});
   }
 
@@ -122,12 +132,22 @@ class _RivePlayerState extends State<RivePlayer> {
 
   @override
   Widget build(BuildContext context) {
-    return riveFile != null
-        ? rive.RiveArtboardWidget(
-            artboard: artboard,
-            painter: stateMachinePainter,
-          )
-        : const SizedBox();
+    if (riveFile == null) return const SizedBox();
+
+    Widget child = rive.RiveArtboardWidget(
+      artboard: artboard,
+      painter: stateMachinePainter,
+    );
+
+    if (widget.semanticsEnabled) {
+      child = rive.RiveSemanticsWidget(
+        artboard: artboard,
+        painter: stateMachinePainter,
+        child: child,
+      );
+    }
+
+    return child;
   }
 
   @override

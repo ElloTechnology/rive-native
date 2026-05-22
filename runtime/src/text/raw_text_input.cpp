@@ -815,6 +815,21 @@ void RawTextInput::text(std::string value)
     captureJournalEntry(startingCursor);
 }
 
+void RawTextInput::textPreserveCursor(std::string value)
+{
+    Cursor startingCursor = m_cursor;
+    m_idealCursorX = -1.0f;
+    setTextPrivate(value);
+    uint32_t maxIndex = static_cast<uint32_t>(length());
+    CursorPosition start(
+        std::min(startingCursor.start().codePointIndex(), maxIndex));
+    CursorPosition end(
+        std::min(startingCursor.end().codePointIndex(), maxIndex));
+    m_cursor = Cursor(start, end);
+    flag(Flags::shapeDirty | Flags::measureDirty | Flags::selectionDirty);
+    captureJournalEntry(startingCursor);
+}
+
 size_t RawTextInput::length() const
 {
     if (empty())
@@ -870,12 +885,12 @@ void RawTextInput::redo()
 
 bool RawTextInput::flagged(RawTextInput::Flags mask) const
 {
-    return m_flags & mask;
+    return enums::any_flag_set(m_flags, mask);
 }
 
 bool RawTextInput::unflag(RawTextInput::Flags mask)
 {
-    if (m_flags & mask)
+    if (enums::any_flag_set(m_flags, mask))
     {
         m_flags &= ~mask;
         return true;
@@ -922,7 +937,7 @@ AABB RawTextInput::measure(float maxWidth, float maxHeight)
         m_textRun.unicharCount = (uint32_t)m_text.size();
         m_measuringShape->shape(m_text,
                                 Span<TextRun>(&m_textRun, 1),
-                                TextSizing::autoHeight,
+                                m_sizing,
                                 maxWidth,
                                 maxHeight,
                                 m_align,

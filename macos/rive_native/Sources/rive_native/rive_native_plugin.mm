@@ -234,6 +234,15 @@ void linkDummyMethods();
     // Clear global GPU pointers to avoid stale globals after teardown.
     setGPU(nullptr, nullptr);
     riveUnlock();
+
+    // Explicitly release Metal resources in the correct order (queue before
+    // device) to prevent the compiler-generated .cxx_destruct from releasing
+    // them in declaration order (device first), which causes a use-after-free
+    // in MTLResourceListPool when the queue's dealloc calls _purgeDevice on
+    // an already-torn-down device.
+    // https://github.com/rive-app/rive-flutter/issues/623
+    _metalCommandQueue = nil;
+    _metalDevice = nil;
 }
 
 + (void)registerWithRegistrar:(NSObject<FlutterPluginRegistrar>*)registrar

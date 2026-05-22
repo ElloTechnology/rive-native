@@ -331,7 +331,7 @@
 
 #define PLS_BLOCK_BEGIN
 #define PLS_DECL4F(IDX, NAME)                                                  \
-    layout(binding = IDX, rgba8) uniform lowp pixelLocalANGLE NAME
+    layout(binding = IDX, rgba8) uniform mediump pixelLocalANGLE NAME
 #define PLS_DECLUI(IDX, NAME)                                                  \
     layout(binding = IDX, r32ui) uniform highp upixelLocalANGLE NAME
 #define PLS_BLOCK_END
@@ -362,7 +362,7 @@
 #define PLS_BLOCK_BEGIN                                                        \
     __pixel_localEXT PLS                                                       \
     {
-#define PLS_DECL4F(IDX, NAME) layout(rgba8) lowp vec4 NAME
+#define PLS_DECL4F(IDX, NAME) layout(rgba8) mediump vec4 NAME
 #define PLS_DECL4F_RGB10_A2(IDX, NAME) layout(rgb10_a2) mediump vec4 NAME
 #define PLS_DECLUI(IDX, NAME) layout(r32ui) highp uint NAME
 #define PLS_BLOCK_END                                                          \
@@ -415,7 +415,7 @@
 #ifdef @TARGET_VULKAN
 #define PLS_DECL4F(IDX, NAME)                                                  \
     layout(set = PLS_TEXTURE_BINDINGS_SET, binding = IDX, rgba8)               \
-        uniform lowp coherent image2D NAME
+        uniform mediump coherent image2D NAME
 #define PLS_DECL4F_RGB10_A2(IDX, NAME)                                         \
     layout(set = PLS_TEXTURE_BINDINGS_SET, binding = IDX, rgb10_a2)            \
         uniform mediump coherent image2D NAME
@@ -424,7 +424,7 @@
         uniform highp coherent uimage2D NAME
 #else
 #define PLS_DECL4F(IDX, NAME)                                                  \
-    layout(binding = IDX, rgba8) uniform lowp coherent image2D NAME
+    layout(binding = IDX, rgba8) uniform mediump coherent image2D NAME
 #define PLS_DECL4F_RGB10_A2(IDX, NAME)                                         \
     layout(binding = IDX, rgb10_a2) uniform mediump coherent image2D NAME
 #define PLS_DECLUI(IDX, NAME)                                                  \
@@ -453,10 +453,12 @@
     layout(input_attachment_index = IDX,                                       \
            binding = IDX,                                                      \
            set = PLS_TEXTURE_BINDINGS_SET)                                     \
-        uniform lowp subpassInput _in_##NAME;
+        uniform mediump subpassInput _in_##NAME
+#define PLS_DECL4F_WRITEONLY(IDX, NAME)                                        \
+    layout(location = IDX) out mediump vec4 NAME
 #define PLS_DECL4F(IDX, NAME)                                                  \
     PLS_DECL4F_READONLY(IDX, NAME);                                            \
-    layout(location = IDX) out lowp vec4 NAME
+    PLS_DECL4F_WRITEONLY(IDX, NAME)
 #define PLS_DECLUI(IDX, NAME)                                                  \
     layout(input_attachment_index = IDX,                                       \
            binding = IDX,                                                      \
@@ -481,7 +483,7 @@
 #ifdef @PLS_IMPL_NONE
 
 #define PLS_BLOCK_BEGIN
-#define PLS_DECL4F(IDX, NAME) layout(location = IDX) out lowp vec4 NAME
+#define PLS_DECL4F(IDX, NAME) layout(location = IDX) out mediump vec4 NAME
 #define PLS_DECLUI(IDX, NAME) layout(location = IDX) out highp uvec4 NAME
 #define PLS_BLOCK_END
 
@@ -570,23 +572,22 @@
 #ifdef @USING_PLS_STORAGE_TEXTURES
 
 #ifdef @TARGET_VULKAN
-#define PLS_DECLUI_ATOMIC(IDX, NAME)                                           \
+#define PLS_DECLUI_UAV(IDX, NAME)                                              \
     layout(set = PLS_TEXTURE_BINDINGS_SET, binding = IDX, r32ui)               \
         uniform highp coherent uimage2D NAME
-#define PLS_DECL4F_RGB10_A2_ATOMIC(IDX, NAME)                                  \
+#define PLS_DECL4F_RGB10_A2_UAV(IDX, NAME)                                     \
     layout(set = PLS_TEXTURE_BINDINGS_SET, binding = IDX, rgb10_a2)            \
         uniform mediump coherent image2D NAME
 #else
-#define PLS_DECLUI_ATOMIC(IDX, NAME)                                           \
+#define PLS_DECLUI_UAV(IDX, NAME)                                              \
     layout(binding = IDX, r32ui) uniform highp coherent uimage2D NAME
-#define PLS_DECL4F_RGB10_A2_ATOMIC(IDX, NAME)                                  \
+#define PLS_DECL4F_RGB10_A2_UAV(IDX, NAME)                                     \
     layout(binding = IDX, rgb10_a2) uniform mediump coherent image2D NAME;
 #endif
-#define PLS_LOADUI_ATOMIC(PLANE) imageLoad(PLANE, _plsCoord).r
-#define PLS_STOREUI_ATOMIC(PLANE, VALUE)                                       \
-    imageStore(PLANE, _plsCoord, uvec4(VALUE))
-#define PLS_LOAD4F_ATOMIC(PLANE) imageLoad(PLANE, _plsCoord)
-#define PLS_STORE4F_ATOMIC(PLANE, VALUE) imageStore(PLANE, _plsCoord, VALUE)
+#define PLS_LOADUI_UAV(PLANE) imageLoad(PLANE, _plsCoord).r
+#define PLS_STOREUI_UAV(PLANE, VALUE) imageStore(PLANE, _plsCoord, uvec4(VALUE))
+#define PLS_LOAD4F_UAV(PLANE) imageLoad(PLANE, _plsCoord)
+#define PLS_STORE4F_UAV(PLANE, VALUE) imageStore(PLANE, _plsCoord, VALUE)
 #define PLS_ATOMIC_MAX(PLANE, X) imageAtomicMax(PLANE, _plsCoord, X)
 #define PLS_ATOMIC_ADD(PLANE, X) imageAtomicAdd(PLANE, _plsCoord, X)
 
@@ -650,7 +651,7 @@
 #define DST_COLOR_TEXTURE(NAME)                                                \
     layout(input_attachment_index = 0,                                         \
            binding = COLOR_PLANE_IDX,                                          \
-           set = PLS_TEXTURE_BINDINGS_SET) uniform lowp subpassInputMS NAME
+           set = PLS_TEXTURE_BINDINGS_SET) uniform mediump subpassInputMS NAME
 #define DST_COLOR_FETCH(NAME)                                                  \
     dst_color_fetch(mat4(subpassLoad(NAME, 0),                                 \
                          subpassLoad(NAME, 1),                                 \

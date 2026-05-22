@@ -525,9 +525,9 @@ public:
         m_isDirty = true;
     }
 
-    void addRenderPath(RenderPath* path, const Mat2D& matrix) override
+    void addRenderPath(const RenderPath* path, const Mat2D& matrix) override
     {
-        LITE_RTTI_CAST_OR_RETURN(flutterPath, FlutterRenderPath*, path);
+        LITE_RTTI_CAST_OR_RETURN(flutterPath, const FlutterRenderPath*, path);
 
         RawPath::Iter transformedPathIter =
             m_rawPath.addPath(flutterPath->m_rawPath, &matrix);

@@ -61,6 +61,7 @@
 #include "rive/animation/listener_types/listener_input_type_event.hpp"
 #include "rive/focus_data.hpp"
 #include "rive/node.hpp"
+#include "rive/semantic/semantic_data.hpp"
 #include <array>
 #include <memory>
 #include <unordered_map>
@@ -158,6 +159,8 @@ public:
                 clearAnimationReset();
                 fireEvents(StateMachineFireOccurance::atEnd,
                            m_transition->events());
+                performListenerActions(StateMachineFireOccurance::atEnd,
+                                       m_transition->listenerActions());
             }
         }
         else
@@ -284,6 +287,20 @@ public:
         }
     }
 
+    void performListenerActions(
+        StateMachineFireOccurance occurs,
+        const std::vector<std::unique_ptr<ListenerAction>>& listenerActions)
+    {
+        for (const auto& action : listenerActions)
+        {
+            if (action->matchesScheduledOccurrence(occurs))
+            {
+                action->perform(m_stateMachineInstance,
+                                ListenerInvocation::none());
+            }
+        }
+    }
+
     bool canChangeState(const LayerState* stateTo)
     {
         return !(
@@ -293,12 +310,12 @@ public:
 
     double randomValue() { return RandomProvider::generateRandomFloat(); }
 
-    bool changeState(const LayerState* stateTo)
+    void changeState(const LayerState* stateTo)
     {
         if ((m_currentState == nullptr ? nullptr : m_currentState->state()) ==
             stateTo)
         {
-            return false;
+            return;
         }
 
         // Fire end events for the state we're changing from.
@@ -306,6 +323,8 @@ public:
         {
             fireEvents(StateMachineFireOccurance::atEnd,
                        m_currentState->state()->events());
+            performListenerActions(StateMachineFireOccurance::atEnd,
+                                   m_currentState->state()->listenerActions());
         }
 
         m_currentState =
@@ -318,8 +337,10 @@ public:
         {
             fireEvents(StateMachineFireOccurance::atStart,
                        m_currentState->state()->events());
+            performListenerActions(StateMachineFireOccurance::atStart,
+                                   m_currentState->state()->listenerActions());
         }
-        return true;
+        return;
     }
 
     StateTransition* findRandomTransition(StateInstance* stateFromInstance)
@@ -459,11 +480,15 @@ public:
                     StateTransitionBase::durationPropertyKey);
             fireEvents(StateMachineFireOccurance::atStart,
                        transition->events());
+            performListenerActions(StateMachineFireOccurance::atStart,
+                                   transition->listenerActions());
             if (resolvedDuration() == 0)
             {
                 m_transitionCompleted = true;
                 fireEvents(StateMachineFireOccurance::atEnd,
                            transition->events());
+                performListenerActions(StateMachineFireOccurance::atEnd,
+                                       transition->listenerActions());
             }
             else
             {
@@ -901,6 +926,7 @@ public:
                         case ListenerType::focus:
                         case ListenerType::blur:
                         case ListenerType::keyboard:
+                        case ListenerType::semanticAction:
                             break;
                     }
                 }
@@ -927,6 +953,7 @@ public:
                         case ListenerType::focus:
                         case ListenerType::blur:
                         case ListenerType::keyboard:
+                        case ListenerType::semanticAction:
                             break;
                     }
                 }
@@ -956,8 +983,10 @@ public:
         {
             return false;
         }
-        for (int i = (int)componentList->artboardCount(); i >= 0; i--)
+        const auto& order = componentList->orderedListIndices();
+        for (auto it = order.rbegin(); it != order.rend(); ++it)
         {
+            const int i = *it;
             Vec2D listPosition;
             if (!componentList->worldToLocal(position, &listPosition, i))
             {
@@ -985,8 +1014,10 @@ public:
         {
             return hitResult;
         }
-        for (int i = (int)componentList->artboardCount(); i >= 0; i--)
+        const auto& order = componentList->orderedListIndices();
+        for (auto it = order.rbegin(); it != order.rend(); ++it)
         {
+            const int i = *it;
             Vec2D listPosition;
             bool hit = componentList->worldToLocal(position, &listPosition, i);
             if (!hit)
@@ -1041,6 +1072,7 @@ public:
                         case ListenerType::focus:
                         case ListenerType::blur:
                         case ListenerType::keyboard:
+                        case ListenerType::semanticAction:
                             break;
                     }
                 }
@@ -1066,6 +1098,7 @@ public:
                         case ListenerType::focus:
                         case ListenerType::blur:
                         case ListenerType::keyboard:
+                        case ListenerType::semanticAction:
                             break;
                     }
                 }
@@ -1224,7 +1257,7 @@ ListenerViewModelPropertyBinding::ListenerViewModelPropertyBinding(
     vmProp->addDependent(this);
 }
 
-void ListenerViewModelPropertyBinding::relinkDataBind() {};
+void ListenerViewModelPropertyBinding::relinkDataBind() {}
 
 ListenerViewModelPropertyBinding::~ListenerViewModelPropertyBinding()
 {
@@ -1712,6 +1745,29 @@ StateMachineInstance::StateMachineInstance(const StateMachine* machine,
                 }
             }
         }
+        // Semantic listeners are driven by accessibility actions rather
+        // than pointer events. The editor enforces that the listener's
+        // target Node owns a SemanticData child directly; no ancestor
+        // walk is performed here.
+        if (listener->hasListener(ListenerType::semanticAction))
+        {
+            auto target = m_artboardInstance->resolve(listener->targetId());
+            if (target != nullptr && target->is<Node>())
+            {
+                for (auto* child : target->as<Node>()->children())
+                {
+                    if (child->is<SemanticData>())
+                    {
+                        m_semanticListenerGroups.push_back(
+                            std::make_unique<SemanticListenerGroup>(
+                                child->as<SemanticData>(),
+                                listener,
+                                this));
+                        break;
+                    }
+                }
+            }
+        }
 
         if (listener->hasListeners(kPointerHitListenerTypes))
         {
@@ -1896,6 +1952,14 @@ StateMachineInstance::~StateMachineInstance()
     if (m_externalFocusManager == nullptr && m_artboardInstance != nullptr)
     {
         m_artboardInstance->cleanupFocusTree();
+    }
+
+    // Clean up semantic tree BEFORE the internal SemanticManager is destroyed.
+    // Only needed when we own the manager; if external, the parent cleans up.
+    if (m_externalSemanticManager == nullptr && m_semanticManager != nullptr &&
+        m_artboardInstance != nullptr)
+    {
+        m_artboardInstance->cleanupSemanticTree();
     }
 
     unbind();
@@ -2104,6 +2168,45 @@ void StateMachineInstance::setExternalFocusManager(FocusManager* manager)
     }
 }
 
+void StateMachineInstance::enableSemantics()
+{
+    if (semanticManager() != nullptr)
+    {
+        return;
+    }
+    m_semanticManager = std::make_unique<SemanticManager>();
+    if (m_artboardInstance != nullptr)
+    {
+        m_artboardInstance->buildSemanticTree(semanticManager(), nullptr);
+    }
+}
+
+void StateMachineInstance::setExternalSemanticManager(
+    SemanticManager* manager,
+    rcp<SemanticNode> parentNode)
+{
+    if (m_externalSemanticManager == manager)
+    {
+        return;
+    }
+
+    // Clean up the old semantic tree if one was built with a different manager.
+    if (m_artboardInstance != nullptr &&
+        m_artboardInstance->semanticManager() != nullptr)
+    {
+        m_artboardInstance->cleanupSemanticTree();
+    }
+
+    m_externalSemanticManager = manager;
+
+    // Rebuild with the new manager. semanticManager() now returns the external
+    // manager if set, or the internal one if null.
+    if (m_artboardInstance != nullptr)
+    {
+        m_artboardInstance->buildSemanticTree(semanticManager(), parentNode);
+    }
+}
+
 void StateMachineInstance::queueFocusEvent(FocusListenerGroup* group,
                                            bool isFocus)
 {
@@ -2151,6 +2254,77 @@ void StateMachineInstance::processFocusEvents()
     }
 }
 
+void StateMachineInstance::queueSemanticEvent(SemanticListenerGroup* group,
+                                              SemanticActionType actionType)
+{
+    m_queuedSemanticEvents.push_back({group, actionType});
+    m_needsAdvance = true;
+}
+
+void StateMachineInstance::processSemanticEvents()
+{
+    if (m_queuedSemanticEvents.empty())
+    {
+        return;
+    }
+
+    auto events = std::move(m_queuedSemanticEvents);
+    m_queuedSemanticEvents.clear();
+
+    for (const auto& event : events)
+    {
+        if (event.group == nullptr)
+        {
+            continue;
+        }
+        auto* listener = event.group->listener();
+        if (listener == nullptr)
+        {
+            continue;
+        }
+        listener->performChanges(
+            this,
+            ListenerInvocation::semantic(event.group, event.actionType));
+    }
+}
+
+void StateMachineInstance::fireSemanticAction(uint32_t semanticNodeId,
+                                              SemanticActionType actionType)
+{
+    // The unified SemanticManager indexes every SD in the tree — top-level,
+    // nested-artboard, and data-bound list items — so this lookup handles
+    // all dispatch targets uniformly. SemanticData::fire*() routes the
+    // event to listeners, which queue on their own owning state machine.
+    auto* mgr = semanticManager();
+    if (mgr == nullptr)
+    {
+        return;
+    }
+    auto* node = mgr->nodeById(semanticNodeId);
+    if (node == nullptr)
+    {
+        return;
+    }
+    auto* sd = node->semanticData();
+    if (sd == nullptr)
+    {
+        // Boundary nodes have no owning SemanticData.
+        return;
+    }
+    switch (actionType)
+    {
+        case SemanticActionType::tap:
+            sd->fireSemanticTap();
+            break;
+        case SemanticActionType::increase:
+            sd->fireSemanticIncrease();
+            break;
+        case SemanticActionType::decrease:
+            sd->fireSemanticDecrease();
+            break;
+    }
+}
+
 bool StateMachineInstance::advance(float seconds, bool newFrame)
 {
     if (m_drawOrderChangeCounter !=
@@ -2162,6 +2336,7 @@ bool StateMachineInstance::advance(float seconds, bool newFrame)
     if (newFrame)
     {
         processFocusEvents();
+        processSemanticEvents();
         applyEvents();
         m_needsAdvance = false;
     }

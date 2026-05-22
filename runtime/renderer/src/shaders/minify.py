@@ -1,5 +1,6 @@
 import argparse
 import glob
+import io
 import os
 import re
 import sys
@@ -36,6 +37,7 @@ parser.add_argument("-o", "--outdir", required=True,
 parser.add_argument("-H", "--human-readable", action='store_true',
                     help="don't rename or strip out comments or whitespace")
 parser.add_argument("-p", "--ply-path", type=str, help="path to ply module")
+parser.add_argument("-m", "--msvc", action="store_true", help="set this to generate MSVC-compatible headers")
 
 args = parser.parse_args()
 
@@ -43,7 +45,7 @@ if args.ply_path:
     # --ply-path was specified, so add it to the sys path so we can locate the module.
     # (if it was not specified we'll assume that it's already reachable via the path)
 
-    # Convert posix path to windows 
+    # Convert posix path to windows
     convertedPath = args.ply_path
     if sys.platform.startswith('win32') and args.ply_path[:2] == '/c':
         convertedPath = 'C:\\' + args.ply_path[2:]
@@ -455,7 +457,7 @@ class Minifier:
 
 
     # generates rewritten glsl from our tokens.
-    def emit_tokens_to_rewritten_glsl(self, out, *, preserve_exported_switches):
+    def emit_tokens_to_rewritten_glsl(self, out, *, preserve_exported_switches, calling_token_type:str=None):
         # stand-in for a null token.
         lasttoken = lambda : None
         lasttoken.type = ""
@@ -474,7 +476,8 @@ class Minifier:
 
             is_directive = tok.type in ["DEFINE", "IFDEF", "DIRECTIVE"]
             needs_whitespace = tok.type in ["FLOAT", "INT", "HEX", "ID", "DEFINED_ID"]
-            if is_directive and not is_newline:
+            # Adding this calling_token_type != 'DEFINE' prevents us from adding a new line to stringify macros
+            if is_directive and not is_newline and calling_token_type != 'DEFINE':
                 out.write('\n')
             elif needs_whitespace and lasttoken_needs_whitespace:
                 out.write(' ')
@@ -498,13 +501,15 @@ class Minifier:
                 if tok.define_arglist != None:
                     is_newline = tok.define_arglist.emit_tokens_to_rewritten_glsl(\
                         out,\
-                        preserve_exported_switches=preserve_exported_switches)
+                        preserve_exported_switches=preserve_exported_switches,\
+                        calling_token_type=tok.type)
                     assert(not is_newline)
                 if tok.define_val != None:
                     out.write(' ')
                     is_newline = tok.define_val.emit_tokens_to_rewritten_glsl(\
                         out,\
-                        preserve_exported_switches=preserve_exported_switches)
+                        preserve_exported_switches=preserve_exported_switches,\
+                        calling_token_type=tok.type)
 
             elif tok.type == "IFDEF":
                 out.write('#')
@@ -522,7 +527,8 @@ class Minifier:
                 if tok.directive_val != None:
                     is_newline = tok.directive_val.emit_tokens_to_rewritten_glsl(\
                         out,\
-                        preserve_exported_switches=preserve_exported_switches)
+                        preserve_exported_switches=preserve_exported_switches,\
+                        calling_token_type=tok.type)
 
             else:
                 out.write(tok.value)
@@ -575,13 +581,38 @@ class Minifier:
         out.write("namespace rive {\n")
         out.write("namespace gpu {\n")
         out.write("namespace glsl {\n")
-        out.write(f'const char {cpp_name}[] = R"===(')
+        if args.msvc:
+            # MSVC cannot compile raw shaders as strings because of an internal
+            # string length limit. There is, however, no limit on arrays so
+            # instead write it out as an array of individual characters.
+            out.write(f'const char {cpp_name}[] = {{\n   ')
 
-        is_newline = self.emit_tokens_to_rewritten_glsl(out, preserve_exported_switches=False)
-        if not is_newline:
-            out.write('\n')
+            codeIO = io.StringIO()
+            self.emit_tokens_to_rewritten_glsl(codeIO, preserve_exported_switches=False)
 
-        out.write(')===";\n')
+            out_ch_count = 0
+            for ch in codeIO.getvalue():
+                # use `repr` to escape the characters (but we need to handle single
+                # quote manually, since it will represent that as "'" - which will
+                # definitely not compile)
+
+                out.write(f" {repr(ch)},") if ch != "'" else out.write(" '\\'',")
+                out_ch_count = out_ch_count + 1
+                CHAR_COUNT_PER_LINE = 12
+                if (out_ch_count % CHAR_COUNT_PER_LINE) == 0:
+                    out.write('\n   ')
+            # Null-terminate so the array is a valid C-string when passed to
+            # APIs like ostream::operator<<(const char*), which read until '\0'.
+            out.write(" '\\0'\n};\n")
+        else:
+            # For non-MSVC outputs just output as a raw string
+            out.write(f'const char {cpp_name}[] = R"===(')
+
+            is_newline = self.emit_tokens_to_rewritten_glsl(out, preserve_exported_switches=False)
+            if not is_newline:
+                out.write('\n')
+
+            out.write(')===";\n')
         out.write("} // namespace glsl\n")
         out.write("} // namespace gpu\n")
         out.write("} // namespace rive")

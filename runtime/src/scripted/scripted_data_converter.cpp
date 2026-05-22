@@ -106,7 +106,8 @@ DataValue* ScriptedDataConverter::applyConversion(DataValue* value,
     if (pushDataValue(value))
     {
         // Stack: [self, field, self, ScriptedData]
-        if (static_cast<lua_Status>(rive_lua_pcall(L, 2, 1)) == LUA_OK)
+        if (static_cast<lua_Status>(
+                rive_lua_pcall_with_context(L, this, 2, 1)) == LUA_OK)
         {
             auto result = (ScriptedDataValue*)lua_touserdata(L, -1);
             if (result->isNumber())
@@ -184,15 +185,26 @@ void ScriptedDataConverter::bindFromContext(DataContext* dataContext,
 bool ScriptedDataConverter::advanceComponent(float elapsedSeconds,
                                              AdvanceFlags flags)
 {
+    if (!enums::is_flag_set(flags, AdvanceFlags::AdvanceNested))
+    {
+        elapsedSeconds = 0;
+    }
+    return advance(elapsedSeconds);
+}
+
+bool ScriptedDataConverter::advance(float elapsedSeconds)
+{
+
     if (elapsedSeconds == 0)
     {
         return false;
     }
-    if ((flags & AdvanceFlags::AdvanceNested) == 0)
+    auto needsAdvance = scriptAdvance(elapsedSeconds);
+    if (needsAdvance)
     {
-        elapsedSeconds = 0;
+        markConverterDirty();
     }
-    return scriptAdvance(elapsedSeconds);
+    return needsAdvance;
 }
 
 void ScriptedDataConverter::addProperty(CustomProperty* prop)
@@ -227,6 +239,37 @@ Core* ScriptedDataConverter::clone() const
     {
         auto clonedValue = prop->clone()->as<CustomProperty>();
         twin->addProperty(clonedValue);
+        auto scriptedInputClone = ScriptInput::from(clonedValue);
+        auto scriptedInputSource = ScriptInput::from(prop);
+        auto thisDataBinds = dataBinds();
+        auto twinDataBinds = twin->dataBinds();
+        if (scriptedInputClone && scriptedInputSource)
+        {
+            if (scriptedInputSource->dataBind())
+            {
+                int index = 0;
+                // Data binds are cloned in the data converters, and assigned to
+                // the right target here
+                for (auto& dataBind : thisDataBinds)
+                {
+                    if (dataBind->target() == prop)
+                    {
+                        if (index < twinDataBinds.size())
+                        {
+                            twinDataBinds[index]->target(clonedValue);
+                            scriptedInputClone->dataBind(twinDataBinds[index]);
+                        }
+                    }
+                    index++;
+                }
+            }
+        }
     }
     return twin;
+}
+
+bool ScriptedDataConverter::addDataBindFromScriptedObject(DataBind* dataBind)
+{
+    addDataBind(dataBind);
+    return true;
 }

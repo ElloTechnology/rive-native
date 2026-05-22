@@ -1183,6 +1183,7 @@ void RenderContextVulkanImpl::resizeTransientPLSBacking(uint32_t width,
     m_plsTransientClipView.reset();
     m_plsTransientScratchColorTexture.reset();
     m_plsBlendStorageTexture_RGB10_A2.reset();
+    m_plsTransientClipTexture_R16F.reset();
     m_plsOffscreenColorTexture.reset();
 }
 
@@ -1336,6 +1337,22 @@ vkutil::Texture2D* RenderContextVulkanImpl::plsBlendStorageTexture_RGB10_A2()
     return m_plsBlendStorageTexture_RGB10_A2.get();
 }
 
+vkutil::Texture2D* RenderContextVulkanImpl::plsTransientClipTexture_R16F()
+{
+    if (m_plsTransientClipTexture_R16F == nullptr)
+    {
+        m_plsTransientClipTexture_R16F = m_vk->makeTexture2D(
+            {
+                .format = VK_FORMAT_R16_SFLOAT,
+                .extent = m_plsExtent,
+                .usage = m_plsTransientUsageFlags,
+            },
+            "plsTransientClipTexture_R16F");
+    }
+
+    return m_plsTransientClipTexture_R16F.get();
+}
+
 vkutil::Texture2D* RenderContextVulkanImpl::accessPLSOffscreenColorTexture(
     VkCommandBuffer commandBuffer,
     const vkutil::ImageAccess& dstAccess,
@@ -1459,7 +1476,8 @@ bool RenderContextVulkanImpl::wantsManualRenderPassResolve(
             return true;
         }
         if (m_workarounds.needsManualMSAAResolveAfterDstRead &&
-            (combinedDrawContents & gpu::DrawContents::advancedBlend))
+            enums::is_flag_set(combinedDrawContents,
+                               gpu::DrawContents::advancedBlend))
         {
             return true;
         }
@@ -1690,8 +1708,8 @@ const DrawPipelineLayoutVulkan& RenderContextVulkanImpl::DrawRenderPass::begin(
     StackVector<VkClearValue, layout::MAX_RENDER_PASS_ATTACHMENTS> clearValues;
     if (pipelineManager->plsBackingType(m_desc.interlockMode) ==
             PLSBackingType::inputAttachment ||
-        (pipelineLayout.renderPassOptions() &
-         RenderPassOptionsVulkan::fixedFunctionColorOutput))
+        enums::is_flag_set(pipelineLayout.renderPassOptions(),
+                           RenderPassOptionsVulkan::fixedFunctionColorOutput))
     {
         assert(framebufferViews.size() == COLOR_PLANE_IDX);
         framebufferViews.push_back(m_colorImageView);
@@ -1715,7 +1733,8 @@ const DrawPipelineLayoutVulkan& RenderContextVulkanImpl::DrawRenderPass::begin(
             clearValues.push_back({.color = vkutil::color_clear_r32ui(
                                        m_desc.coverageClearValue)});
 
-            if (renderPassOptions & RenderPassOptionsVulkan::manuallyResolved)
+            if (enums::is_flag_set(renderPassOptions,
+                                   RenderPassOptionsVulkan::manuallyResolved))
             {
                 // The render pass will transfer the color data back into the
                 // renderTarget at the end.
@@ -1734,14 +1753,14 @@ const DrawPipelineLayoutVulkan& RenderContextVulkanImpl::DrawRenderPass::begin(
             break;
 
         case gpu::InterlockMode::atomics:
-        case gpu::InterlockMode::clockwiseAtomic:
             assert(framebufferViews.size() == CLIP_PLANE_IDX);
             framebufferViews.push_back(
                 m_impl->plsTransientScratchColorTexture()->vkImageView());
             clearValues.push_back({});
 
-            if (pipelineLayout.renderPassOptions() &
-                RenderPassOptionsVulkan::atomicCoalescedResolveAndTransfer)
+            if (enums::is_flag_set(
+                    pipelineLayout.renderPassOptions(),
+                    RenderPassOptionsVulkan::atomicCoalescedResolveAndTransfer))
             {
                 assert(m_desc.interlockMode == gpu::InterlockMode::atomics);
                 assert(framebufferViews.size() == COALESCED_ATOMIC_RESOLVE_IDX);
@@ -1768,6 +1787,13 @@ const DrawPipelineLayoutVulkan& RenderContextVulkanImpl::DrawRenderPass::begin(
             // clockwise uses storage textures exclusively instead of MRT.
             break;
 
+        case gpu::InterlockMode::clockwiseAtomic:
+            assert(framebufferViews.size() == CLIP_PLANE_IDX);
+            framebufferViews.push_back(
+                m_impl->plsTransientClipTexture_R16F()->vkImageView());
+            clearValues.push_back({});
+            break;
+
         case gpu::InterlockMode::msaa:
             assert(framebufferViews.size() == MSAA_DEPTH_STENCIL_IDX);
             framebufferViews.push_back(
@@ -1779,8 +1805,9 @@ const DrawPipelineLayoutVulkan& RenderContextVulkanImpl::DrawRenderPass::begin(
             framebufferViews.push_back(m_msaaResolveImageView);
             clearValues.push_back({});
 
-            if (pipelineLayout.renderPassOptions() &
-                RenderPassOptionsVulkan::msaaSeedFromOffscreenTexture)
+            if (enums::is_flag_set(
+                    pipelineLayout.renderPassOptions(),
+                    RenderPassOptionsVulkan::msaaSeedFromOffscreenTexture))
             {
                 assert(overrideColorLoadAction ==
                        gpu::LoadAction::preserveRenderTarget);
@@ -1872,12 +1899,13 @@ void RenderContextVulkanImpl::DrawRenderPass::interruptIfNeeded(
         // pass is too complex, and we've reached the complexity threshold.
         // Interrupt and begin a new render pass.
         RenderPassOptionsVulkan renderPassOptions = m_renderPassOptions;
-        assert(renderPassOptions &
-               RenderPassOptionsVulkan::rasterOrderingInterruptible);
+        assert(enums::is_flag_set(
+            renderPassOptions,
+            RenderPassOptionsVulkan::rasterOrderingInterruptible));
         // Manually resolved render passes aren't currently compatible with
         // interruptions.
-        assert(
-            !(renderPassOptions & RenderPassOptionsVulkan::manuallyResolved));
+        assert(!enums::is_flag_set(renderPassOptions,
+                                   RenderPassOptionsVulkan::manuallyResolved));
 
         renderPassOptions |= RenderPassOptionsVulkan::rasterOrderingResume;
         if (pendingTessPatchCount <= workarounds.maxInstancesPerRenderPass)
@@ -1960,7 +1988,7 @@ void RenderContextVulkanImpl::flush(const FlushDescriptor& desc)
             case DrawType::msaaMidpointFanPathsCover:
                 pendingTessPatchCount += batch.elementCount;
                 break;
-            case DrawType::msaaStencilClipReset:
+            case DrawType::clipReset:
             case DrawType::interiorTriangulation:
             case DrawType::atlasBlit:
             case DrawType::imageRect:
@@ -2505,8 +2533,9 @@ void RenderContextVulkanImpl::flush(const FlushDescriptor& desc)
         // VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT.
         .pipelineStages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
         .accessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-        .layout = (renderPassOptions &
-                   RenderPassOptionsVulkan::fixedFunctionColorOutput)
+        .layout = enums::is_flag_set(
+                      renderPassOptions,
+                      RenderPassOptionsVulkan::fixedFunctionColorOutput)
                       ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
                       : VK_IMAGE_LAYOUT_GENERAL,
     };
@@ -2597,8 +2626,9 @@ void RenderContextVulkanImpl::flush(const FlushDescriptor& desc)
                     : vkutil::ImageAccessAction::preserveContents);
         }
     }
-    else if ((renderPassOptions &
-              RenderPassOptionsVulkan::fixedFunctionColorOutput) ||
+    else if (enums::is_flag_set(
+                 renderPassOptions,
+                 RenderPassOptionsVulkan::fixedFunctionColorOutput) ||
              ((desc.interlockMode == gpu::InterlockMode::rasterOrdering ||
                desc.interlockMode == gpu::InterlockMode::atomics) &&
               (renderTarget->targetUsageFlags() &
@@ -2771,10 +2801,11 @@ void RenderContextVulkanImpl::flush(const FlushDescriptor& desc)
                 .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                 .levelCount = 1,
                 .baseArrayLayer = 0,
-                .layerCount = (desc.combinedShaderFeatures &
-                               gpu::ShaderFeatures::ENABLE_CLIPPING)
-                                  ? 2u  // coverage and clip.
-                                  : 1u, // coverage only.
+                .layerCount =
+                    enums::is_flag_set(desc.combinedShaderFeatures,
+                                       gpu::ShaderFeatures::ENABLE_CLIPPING)
+                        ? 2u  // coverage and clip.
+                        : 1u, // coverage only.
             };
 
             m_vk->CmdClearColorImage(commandBuffer,
@@ -2815,8 +2846,8 @@ void RenderContextVulkanImpl::flush(const FlushDescriptor& desc)
 
     if ((desc.interlockMode == gpu::InterlockMode::clockwise ||
          desc.interlockMode == gpu::InterlockMode::clockwiseAtomic) &&
-        !(renderPassOptions &
-          RenderPassOptionsVulkan::fixedFunctionColorOutput))
+        !enums::is_flag_set(renderPassOptions,
+                            RenderPassOptionsVulkan::fixedFunctionColorOutput))
     {
         // Clockwise modes use an extra storage texture for a blendColor when
         // advanced blend is active. Wait for any memory transactions on the
@@ -2927,8 +2958,9 @@ void RenderContextVulkanImpl::flush(const FlushDescriptor& desc)
             descriptorSetAllocator.allocateDescriptorSet(
                 drawRenderPass.pipelineLayout().plsLayout());
 
-        if (!(renderPassOptions &
-              RenderPassOptionsVulkan::fixedFunctionColorOutput))
+        if (!enums::is_flag_set(
+                renderPassOptions,
+                RenderPassOptionsVulkan::fixedFunctionColorOutput))
         {
             m_vk->updateImageDescriptorSets(
                 inputAttachmentDescriptorSet,
@@ -2952,10 +2984,11 @@ void RenderContextVulkanImpl::flush(const FlushDescriptor& desc)
                 },
                 {{
                     .imageView =
-                        (desc.interlockMode == gpu::InterlockMode::atomics ||
-                         desc.interlockMode ==
-                             gpu::InterlockMode::clockwiseAtomic)
+                        (desc.interlockMode == gpu::InterlockMode::atomics)
                             ? plsTransientScratchColorTexture()->vkImageView()
+                        : (desc.interlockMode ==
+                           gpu::InterlockMode::clockwiseAtomic)
+                            ? plsTransientClipTexture_R16F()->vkImageView()
                             : *plsTransientClipView(),
                     .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
                 }});
@@ -2964,8 +2997,9 @@ void RenderContextVulkanImpl::flush(const FlushDescriptor& desc)
         if (desc.interlockMode == gpu::InterlockMode::rasterOrdering ||
             ((desc.interlockMode == gpu::InterlockMode::clockwise ||
               desc.interlockMode == gpu::InterlockMode::clockwiseAtomic) &&
-             !(renderPassOptions &
-               RenderPassOptionsVulkan::fixedFunctionColorOutput)))
+             !enums::is_flag_set(
+                 renderPassOptions,
+                 RenderPassOptionsVulkan::fixedFunctionColorOutput)))
         {
             m_vk->updateImageDescriptorSets(
                 inputAttachmentDescriptorSet,
@@ -3088,9 +3122,10 @@ void RenderContextVulkanImpl::flush(const FlushDescriptor& desc)
     // If the color attachment is offscreen and wasn't resolved already, copy
     // it back to the main renderTarget.
     if (colorAttachmentIsOffscreen &&
-        !(renderPassOptions &
-          (RenderPassOptionsVulkan::manuallyResolved |
-           RenderPassOptionsVulkan::atomicCoalescedResolveAndTransfer)))
+        enums::no_flags_set(
+            renderPassOptions,
+            RenderPassOptionsVulkan::manuallyResolved |
+                RenderPassOptionsVulkan::atomicCoalescedResolveAndTransfer))
     {
 #ifndef __APPLE__
         // In general, rasterOrdering flushes should not need this copy because
@@ -3226,8 +3261,9 @@ void RenderContextVulkanImpl::submitDrawList(
                 : batch.shaderFeatures;
 
         auto shaderMiscFlags = batch.shaderMiscFlags;
-        if ((drawRenderPass->renderPassOptions() &
-             RenderPassOptionsVulkan::atomicCoalescedResolveAndTransfer) &&
+        if (enums::is_flag_set(
+                drawRenderPass->renderPassOptions(),
+                RenderPassOptionsVulkan::atomicCoalescedResolveAndTransfer) &&
             drawType == gpu::DrawType::renderPassResolve)
         {
             assert(desc.interlockMode == gpu::InterlockMode::atomics);
@@ -3241,26 +3277,34 @@ void RenderContextVulkanImpl::submitDrawList(
             drawPipelineOptions |= DrawPipelineVulkan::Options::wireframe;
         }
 
-        if (batch.barriers & (gpu::BarrierFlags::plsAtomicPreResolve |
-                              gpu::BarrierFlags::msaaPostInit |
-                              gpu::BarrierFlags::preManualResolve |
-                              BarrierFlags::clockwiseBorrowedCoverage))
+        if (enums::any_flag_set(batch.barriers,
+                                gpu::BarrierFlags::plsAtomicPreResolve |
+                                    gpu::BarrierFlags::msaaPostInit |
+                                    gpu::BarrierFlags::preManualResolve |
+                                    BarrierFlags::clockwiseBorrowedCoverage))
         {
             m_vk->CmdNextSubpass(commandBuffer, VK_SUBPASS_CONTENTS_INLINE);
         }
 
-        if (batch.barriers & (BarrierFlags::plsAtomic | BarrierFlags::dstBlend))
+        if (enums::any_flag_set(batch.barriers,
+                                BarrierFlags::plsAtomic |
+                                    BarrierFlags::dstBlend))
         {
-            // Wait for color attachment writes to complete before we read the
-            // input attachments again.
             assert(desc.interlockMode == gpu::InterlockMode::atomics ||
                    (desc.interlockMode == gpu::InterlockMode::clockwiseAtomic &&
-                    !desc.fixedFunctionColorOutput) ||
+                    (!desc.fixedFunctionColorOutput ||
+                     enums::is_flag_set(batch.barriers,
+                                        BarrierFlags::plsAtomic))) ||
                    (desc.interlockMode == gpu::InterlockMode::msaa &&
                     (!desc.fixedFunctionColorOutput ||
                      // The MSAA init also reads the framebuffer.
                      batch.drawType == gpu::DrawType::renderPassInitialize)));
+            assert(!enums::is_flag_set(
+                batch.shaderMiscFlags,
+                gpu::ShaderMiscFlags::borrowedCoveragePass));
             assert(drawType != gpu::DrawType::renderPassResolve);
+            // Wait for color attachment writes to complete before we read the
+            // input attachments again.
             m_vk->memoryBarrier(
                 commandBuffer,
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -3347,7 +3391,7 @@ void RenderContextVulkanImpl::submitDrawList(
                 break;
             }
 
-            case DrawType::msaaStencilClipReset:
+            case DrawType::clipReset:
             case DrawType::interiorTriangulation:
             case DrawType::atlasBlit:
             {
@@ -3466,7 +3510,8 @@ void RenderContextVulkanImpl::submitDrawList(
         }
     }
 
-    if (desc.unresolvedBarriers & gpu::BarrierFlags::clockwiseBorrowedCoverage)
+    if (enums::is_flag_set(desc.unresolvedBarriers,
+                           gpu::BarrierFlags::clockwiseBorrowedCoverage))
     {
         // clockwiseAtomic render passes need to call vkCmdNextSubpass(), even
         // if we didn't draw anything. Vulkan requires render passes to always
@@ -3475,7 +3520,7 @@ void RenderContextVulkanImpl::submitDrawList(
     }
 
     assert(pendingTessPatchCount == 0);
-}
+} // namespace rive::gpu
 
 void RenderContextVulkanImpl::postFlush(const RenderContext::FlushResources&)
 {

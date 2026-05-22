@@ -6,6 +6,7 @@ import 'dart:ui' show Color;
 import 'package:meta/meta.dart';
 import 'package:rive_native/focus.dart' as focus;
 import 'package:rive_native/rive_audio.dart';
+import 'package:rive_native/semantics.dart';
 import 'package:rive_native/rive_luau.dart';
 import 'package:rive_native/rive_native.dart';
 import 'package:rive_native/src/errors.dart';
@@ -16,6 +17,7 @@ import 'package:rive_native/src/web/rive_audio_web.dart';
 import 'package:rive_native/src/web/rive_luau_web.dart';
 import 'package:rive_native/src/web/rive_renderer_web.dart';
 import 'package:rive_native/src/web/rive_focus_web.dart';
+import 'package:rive_native/src/web/rive_semantic_web.dart';
 import 'package:rive_native/src/web/rive_text_web.dart';
 
 /// Load a list of bytes from a file on the local filesystem at [path].
@@ -1806,12 +1808,14 @@ class WebRiveArtboard extends Artboard {
 
   @override
   void internalBindViewModelInstance(InternalViewModelInstance instance,
-      InternalDataContext dataContext, bool isRoot) {
+      InternalDataContext? dataContext, bool isRoot) {
     RiveWasm.artboardDataContextFromInstance.callAsFunction(
         null,
         _pointer.toJS,
         (instance as WebRiveInternalViewModelInstance).pointer.toJS,
-        (dataContext as WebRiveDataContext).pointer.toJS,
+        dataContext != null
+            ? (dataContext as WebRiveDataContext).pointer.toJS
+            : null,
         isRoot.toJS);
   }
 
@@ -2122,14 +2126,12 @@ class WebStateMachine extends StateMachine
       .callAsFunction(null, _pointer.toJS, position.x.toJS, position.y.toJS));
 
   @override
-  HitResult pointerDown(Vec2D position, {int pointerId = 0}) =>
-      HitResult.values[(RiveWasm.stateMachineInstancePointerDown.callAsFunction(
-              null,
-              _pointer.toJS,
-              position.x.toJS,
-              position.y.toJS,
-              pointerId.toJS) as js.JSNumber)
-          .toDartInt];
+  HitResult pointerDown(Vec2D position, {int pointerId = 0}) {
+    return HitResult.values[(RiveWasm.stateMachineInstancePointerDown
+            .callAsFunction(null, _pointer.toJS, position.x.toJS,
+                position.y.toJS, pointerId.toJS) as js.JSNumber)
+        .toDartInt];
+  }
 
   @override
   HitResult pointerExit(Vec2D position, {int pointerId = 0}) =>
@@ -2182,6 +2184,23 @@ class WebStateMachine extends StateMachine
               position.y.toJS,
               (timeStamp ?? 0).toJS) as js.JSNumber)
           .toDartInt];
+
+  @override
+  void enableSemantics() {
+    SemanticsWasm.enableSemantics(_pointer);
+  }
+
+  @override
+  SemanticsDiff drainSemanticsDiff() => SemanticsWasm.drainDiff(_pointer);
+
+  @override
+  bool focusSemanticNode(int semanticNodeId) =>
+      SemanticsWasm.requestFocus(_pointer, semanticNodeId);
+
+  @override
+  void fireSemanticAction(int semanticNodeId, SemanticActionType actionType) {
+    SemanticsWasm.fireAction(_pointer, semanticNodeId, actionType.index);
+  }
 
   @override
   void internalBindViewModelInstance(InternalViewModelInstance instance) {
@@ -2925,80 +2944,98 @@ class WebRiveInternalViewModelInstance extends InternalViewModelInstance {
   int _pointer;
   WebRiveInternalViewModelInstance(this._pointer);
 
+  int _propertyFromNameAndType(int index, String name, int type) {
+    return RiveWasm.toNativeString(
+      name,
+      (namePointer) {
+        final ptr = (RiveWasm.viewModelInstancePropertyValue.callAsFunction(
+                    null, _pointer.toJS, index.toJS, namePointer, type.toJS)
+                as js.JSNumber)
+            .toDartInt;
+
+        if (ptr == 0) {
+          return 0;
+        }
+
+        return ptr;
+      },
+    );
+  }
+
   @override
-  InternalViewModelInstanceViewModel propertyViewModel(int index) {
-    var ptr = toPointer(RiveWasm.viewModelInstancePropertyValue
-        .callAsFunction(null, _pointer.toJS, index.toJS));
+  InternalViewModelInstanceViewModel propertyViewModel(
+      int index, String name, int propertyType) {
+    var ptr = _propertyFromNameAndType(index, name, propertyType);
     return WebRiveInternalViewModelInstanceViewModel(ptr);
   }
 
   @override
-  InternalViewModelInstanceNumber propertyNumber(int index) {
-    var ptr = toPointer(RiveWasm.viewModelInstancePropertyValue
-        .callAsFunction(null, _pointer.toJS, index.toJS));
+  InternalViewModelInstanceNumber propertyNumber(
+      int index, String name, int propertyType) {
+    var ptr = _propertyFromNameAndType(index, name, propertyType);
     return WebInternalViewModelInstanceNumber(ptr);
   }
 
   @override
-  InternalViewModelInstanceBoolean propertyBoolean(int index) {
-    var ptr = toPointer(RiveWasm.viewModelInstancePropertyValue
-        .callAsFunction(null, _pointer.toJS, index.toJS));
+  InternalViewModelInstanceBoolean propertyBoolean(
+      int index, String name, int propertyType) {
+    var ptr = _propertyFromNameAndType(index, name, propertyType);
     return WebInternalViewModelInstanceBoolean(ptr);
   }
 
   @override
-  InternalViewModelInstanceColor propertyColor(int index) {
-    var ptr = toPointer(RiveWasm.viewModelInstancePropertyValue
-        .callAsFunction(null, _pointer.toJS, index.toJS));
+  InternalViewModelInstanceColor propertyColor(
+      int index, String name, int propertyType) {
+    var ptr = _propertyFromNameAndType(index, name, propertyType);
     return WebInternalViewModelInstanceColor(ptr);
   }
 
   @override
-  InternalViewModelInstanceString propertyString(int index) {
-    var ptr = toPointer(RiveWasm.viewModelInstancePropertyValue
-        .callAsFunction(null, _pointer.toJS, index.toJS));
+  InternalViewModelInstanceString propertyString(
+      int index, String name, int propertyType) {
+    var ptr = _propertyFromNameAndType(index, name, propertyType);
     return WebInternalViewModelInstanceString(ptr);
   }
 
   @override
-  InternalViewModelInstanceTrigger propertyTrigger(int index) {
-    var ptr = toPointer(RiveWasm.viewModelInstancePropertyValue
-        .callAsFunction(null, _pointer.toJS, index.toJS));
+  InternalViewModelInstanceTrigger propertyTrigger(
+      int index, String name, int propertyType) {
+    var ptr = _propertyFromNameAndType(index, name, propertyType);
     return WebInternalViewModelInstanceTrigger(ptr);
   }
 
   @override
-  InternalViewModelInstanceEnum propertyEnum(int index) {
-    var ptr = toPointer(RiveWasm.viewModelInstancePropertyValue
-        .callAsFunction(null, _pointer.toJS, index.toJS));
+  InternalViewModelInstanceEnum propertyEnum(
+      int index, String name, int propertyType) {
+    var ptr = _propertyFromNameAndType(index, name, propertyType);
     return WebInternalViewModelInstanceEnum(ptr);
   }
 
   @override
-  InternalViewModelInstanceList propertyList(int index) {
-    var ptr = toPointer(RiveWasm.viewModelInstancePropertyValue
-        .callAsFunction(null, _pointer.toJS, index.toJS));
+  InternalViewModelInstanceList propertyList(
+      int index, String name, int propertyType) {
+    var ptr = _propertyFromNameAndType(index, name, propertyType);
     return WebInternalViewModelInstanceList(ptr);
   }
 
   @override
-  InternalViewModelInstanceSymbolListIndex propertySymbolListIndex(int index) {
-    var ptr = toPointer(RiveWasm.viewModelInstancePropertyValue
-        .callAsFunction(null, _pointer.toJS, index.toJS));
+  InternalViewModelInstanceSymbolListIndex propertySymbolListIndex(
+      int index, String name, int propertyType) {
+    var ptr = _propertyFromNameAndType(index, name, propertyType);
     return WebInternalViewModelInstanceSymbolListIndex(ptr);
   }
 
   @override
-  InternalViewModelInstanceAsset propertyAsset(int index) {
-    var ptr = toPointer(RiveWasm.viewModelInstancePropertyValue
-        .callAsFunction(null, _pointer.toJS, index.toJS));
+  InternalViewModelInstanceAsset propertyAsset(
+      int index, String name, int propertyType) {
+    var ptr = _propertyFromNameAndType(index, name, propertyType);
     return WebInternalViewModelInstanceAsset(ptr);
   }
 
   @override
-  InternalViewModelInstanceArtboard propertyArtboard(int index) {
-    var ptr = toPointer(RiveWasm.viewModelInstancePropertyValue
-        .callAsFunction(null, _pointer.toJS, index.toJS));
+  InternalViewModelInstanceArtboard propertyArtboard(
+      int index, String name, int propertyType) {
+    var ptr = _propertyFromNameAndType(index, name, propertyType);
     return WebInternalViewModelInstanceArtboard(ptr);
   }
 

@@ -569,6 +569,12 @@ final void Function(Pointer<Void>, Pointer<Utf8>) _rawTextInputSetText =
             'rawTextInputSetText')
         .asFunction();
 
+final void Function(Pointer<Void>, Pointer<Utf8>)
+    _rawTextInputSetTextPreserveCursor = nativeLib
+        .lookup<NativeFunction<Void Function(Pointer<Void>, Pointer<Utf8>)>>(
+            'rawTextInputSetTextPreserveCursor')
+        .asFunction();
+
 final double Function(Pointer<Void> rawText, Pointer<Void>)
     _rawTextInputSetFont = nativeLib
         .lookup<NativeFunction<Float Function(Pointer<Void>, Pointer<Void>)>>(
@@ -1816,6 +1822,13 @@ final class FFIRawTextInput extends RawTextInput
   set text(String value) {
     var nativeString = value.toNativeUtf8();
     _rawTextInputSetText(_pointer, nativeString);
+    malloc.free(nativeString);
+  }
+
+  @override
+  void setTextPreserveCursor(String value) {
+    var nativeString = value.toNativeUtf8();
+    _rawTextInputSetTextPreserveCursor(_pointer, nativeString);
     malloc.free(nativeString);
   }
 

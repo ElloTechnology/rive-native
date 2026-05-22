@@ -13,12 +13,27 @@
 #include "rive/nested_artboard.hpp"
 #include "rive/node.hpp"
 #include "rive/parent_traversal.hpp"
+#include "rive/semantic/semantic_data.hpp"
+#include "rive/semantic/semantic_state.hpp"
 #include "rive/text/text_input.hpp"
 #include "rive/transform_component.hpp"
 #include "rive/world_transform_component.hpp"
 #include <algorithm>
 
 using namespace rive;
+
+namespace
+{
+SemanticData* findSiblingSemanticData(Component* self)
+{
+    auto* parentNode = self->parent();
+    if (parentNode == nullptr || !parentNode->is<Node>())
+    {
+        return nullptr;
+    }
+    return parentNode->as<Node>()->firstChild<SemanticData>();
+}
+} // namespace
 
 FocusData::~FocusData()
 {
@@ -236,7 +251,13 @@ void FocusData::scrollConstraintToShowBounds(ScrollConstraint* constraint,
     // Calculate horizontal scroll adjustment.
     if (constraint->constrainsHorizontal())
     {
-        if (viewportLeft < 0)
+        float elementWidth = viewportRight - viewportLeft;
+        if (elementWidth > viewportWidth)
+        {
+            // Oversized element: keep the left edge visible.
+            deltaX = -viewportLeft;
+        }
+        else if (viewportLeft < 0)
         {
             // Element is to the left of viewport, scroll right (increase
             // offset)
@@ -253,7 +274,13 @@ void FocusData::scrollConstraintToShowBounds(ScrollConstraint* constraint,
     // Calculate vertical scroll adjustment
     if (constraint->constrainsVertical())
     {
-        if (viewportTop < 0)
+        float elementHeight = viewportBottom - viewportTop;
+        if (elementHeight > viewportHeight)
+        {
+            // Oversized element: keep the top edge visible.
+            deltaY = -viewportTop;
+        }
+        else if (viewportTop < 0)
         {
             // Element is above viewport, scroll up (increase offset)
             deltaY = -viewportTop;
@@ -269,9 +296,11 @@ void FocusData::scrollConstraintToShowBounds(ScrollConstraint* constraint,
     if (deltaX != 0 || deltaY != 0)
     {
         // Add delta to effective scroll offset to get target position.
-        float targetX = effectiveScrollX + deltaX;
-        float targetY = effectiveScrollY + deltaY;
-        constraint->scrollToPosition(targetX, targetY);
+        Vec2D current(effectiveScrollX, effectiveScrollY);
+        Vec2D target(effectiveScrollX + deltaX, effectiveScrollY + deltaY);
+        Vec2D snapped =
+            constraint->nearestSnapOffsetInDirection(current, target);
+        constraint->scrollToPosition(snapped.x, snapped.y);
     }
 }
 
@@ -285,6 +314,13 @@ void FocusData::focused()
     {
         listener->onFocused();
     }
+
+    // Sync focus state to sibling SemanticData (if any)
+    auto* sibling = findSiblingSemanticData(this);
+    if (sibling != nullptr)
+    {
+        sibling->setFocusedState(true);
+    }
 }
 
 void FocusData::blurred()
@@ -292,6 +328,13 @@ void FocusData::blurred()
     for (auto* listener : m_focusListeners)
     {
         listener->onBlurred();
+    }
+
+    // Sync focus state to sibling SemanticData (if any)
+    auto* sibling = findSiblingSemanticData(this);
+    if (sibling != nullptr)
+    {
+        sibling->setFocusedState(false);
     }
 }
 

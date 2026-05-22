@@ -1199,6 +1199,17 @@ class WebRawTextInput extends RawTextInput {
   }
 
   @override
+  void setTextPreserveCursor(String value) {
+    final nativeString = value.toWasmUtf8();
+    RiveWasm.rawTextInputSetTextPreserveCursor.callAsFunction(
+      null,
+      _rawText,
+      nativeString.pointer,
+    );
+    nativeString.dispose();
+  }
+
+  @override
   int get length => (RiveWasm.rawTextInputLength.callAsFunction(null, _rawText)
           as js.JSNumber)
       .toDartInt;

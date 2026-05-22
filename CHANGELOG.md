@@ -1,3 +1,11 @@
+## 0.1.6
+
+- Updates the Rive C++ runtime and renderer for the latest features, bug fixes, and performance improvements.
+
+### Fixes
+
+- Fixed [623](https://github.com/rive-app/rive-flutter/issues/623) - Explicitly nil Metal ivars in dealloc to prevent use-after-free on teardown
+
 ## 0.1.5
 
 - Updates the Rive C++ runtime and renderer for the latest features, bug fixes, and performance improvements.

@@ -215,11 +215,32 @@ INLINE half3 unmultiply_rgb(half4 premul)
     return premul.rgb * (premul.a != .0 ? 1. / premul.a : .0);
 }
 
-INLINE half min_value(half4 min4)
+INLINE half min_component(half2 min2) { return min(min2.x, min2.y); }
+
+INLINE half min_component(half3 min3)
+{
+    return min(min_component(min3.xy), min3.z);
+}
+
+INLINE half min_component(half4 min4)
 {
     half2 min2 = min(min4.xy, min4.zw);
     half min1 = min(min2.x, min2.y);
     return min1;
+}
+
+INLINE half max_component(half2 max2) { return max(max2.x, max2.y); }
+
+INLINE half max_component(half3 max3)
+{
+    return max(max_component(max3.xy), max3.z);
+}
+
+INLINE half max_component(half4 max4)
+{
+    half2 max2 = max(max4.xy, max4.zw);
+    half max1 = max(max2.x, max2.y);
+    return max1;
 }
 
 INLINE float manhattan_width(float2 x) { return abs(x.x) + abs(x.y); }
@@ -245,43 +266,6 @@ INLINE half safe_clamp_for_mali(half x, half lo, half hi)
     return clamp(x, lo, hi);
 }
 
-#ifndef $UNIFORM_DEFINITIONS_AUTO_GENERATED
-UNIFORM_BLOCK_BEGIN(FLUSH_UNIFORM_BUFFER_IDX, @FlushUniforms)
-float gradInverseViewportY;
-float tessInverseViewportY;
-float renderTargetInverseViewportX;
-float renderTargetInverseViewportY;
-uint renderTargetWidth;
-uint renderTargetHeight;
-uint colorClearValue;           // Only used if clears are implemented as draws.
-uint coverageClearValue;        // Only used if clears are implemented as draws.
-int4 renderTargetUpdateBounds;  // drawBounds, or renderTargetBounds if there is
-                                // a clear. (LTRB.)
-float2 atlasTextureInverseSize; // 1 / [atlasWidth, atlasHeight]
-float2 atlasContentInverseViewport; // 2 / atlasContentBounds
-uint coverageBufferPrefix;
-// GLSL doesn't appear to provide a lightweight, region-local barrier for memory
-// ordering outside of memoryBarrier*(), which have severe consequences for
-// tiling. When we are already relying on other API level barriers and only need
-// to guard against instruction reordering, we can multiply by a tiny epsilon
-// instead, and introduce artifical dependencies that enforce ordering but don't
-// actually have an effect on the final outcome.
-float epsilonForPseudoMemoryBarrier;
-// Spacing between adjacent path IDs (1 if IEEE compliant).
-uint pathIDGranularity;
-float vertexDiscardValue;
-float mipMapLODBias;
-uint maxPathId;
-float ditherScale;
-float ditherBias;
-// Amount by which to multiply a computed dither value when storing as RGB10 (as
-// opposed to writing it out to the framebuffer).
-float ditherConversionToRGB10;
-// Debugging.
-uint wireframeEnabled;
-UNIFORM_BLOCK_END(uniforms)
-#endif
-
 INLINE half interleaved_gradient_noise(float2 fragCoord, half scale, half bias)
 {
     half v1 = fract(0.06711056 * fragCoord.x + 0.00583715 * fragCoord.y);
@@ -290,7 +274,7 @@ INLINE half interleaved_gradient_noise(float2 fragCoord, half scale, half bias)
 }
 
 #if 0
-// Bayer 4x4 and Bayer 2x2 variants included for reference, 
+// Bayer 4x4 and Bayer 2x2 variants included for reference,
 // but not currently used.
 INLINE half bayer4x4f(float2 fragCoord, float scale, float bias)
 {
@@ -450,24 +434,6 @@ INLINE half4 gamma_to_linear(half4 color)
 }
 #endif // NEEDS_GAMMA_CORRECTION
 #endif // FRAGMENT
-
-#ifdef @DRAW_IMAGE
-#ifndef $UNIFORM_DEFINITIONS_AUTO_GENERATED
-UNIFORM_BLOCK_BEGIN(IMAGE_DRAW_UNIFORM_BUFFER_IDX, @ImageDrawUniforms)
-float4 viewMatrix;
-float2 translate;
-float opacity;
-float padding;
-// clipRectInverseMatrix transforms from pixel coordinates to a space where the
-// clipRect is the normalized rectangle: [-1, -1, 1, 1].
-float4 clipRectInverseMatrix;
-float2 clipRectInverseTranslate;
-uint clipID;
-uint blendMode;
-uint zIndex;
-UNIFORM_BLOCK_END(imageDrawUniforms)
-#endif
-#endif
 
 // The Qualcomm compiler can't handle line breaks in #ifs.
 // clang-format off

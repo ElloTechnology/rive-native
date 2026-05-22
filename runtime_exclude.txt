@@ -4,7 +4,6 @@ cg_renderer
 dev
 rivinfo
 skia
-tess
 test
 tests
 viewer
