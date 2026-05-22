@@ -5,6 +5,7 @@
 #include "rive/renderer/webgpu/render_context_webgpu_impl.hpp"
 
 #include "rive/renderer/draw.hpp"
+#include "rive/renderer/render_canvas.hpp"
 #include "rive/renderer/stack_vector.hpp"
 #include "shaders/constants.glsl"
 
@@ -1909,6 +1910,34 @@ rcp<RenderTargetWebGPU> RenderContextWebGPUImpl::makeRenderTarget(
                                       height));
 }
 
+rcp<RenderCanvas> RenderContextWebGPUImpl::makeRenderCanvas(uint32_t width,
+                                                            uint32_t height)
+{
+    wgpu::TextureDescriptor textureDesc = {
+        .usage = wgpu::TextureUsage::TextureBinding |
+                 wgpu::TextureUsage::RenderAttachment |
+                 wgpu::TextureUsage::CopySrc,
+        .dimension = wgpu::TextureDimension::e2D,
+        .size = {width, height},
+        .format = wgpu::TextureFormat::RGBA8Unorm,
+    };
+
+    auto texture =
+        make_rcp<TextureWebGPUImpl>(width,
+                                    height,
+                                    m_device.CreateTexture(&textureDesc));
+
+    auto renderTarget =
+        makeRenderTarget(wgpu::TextureFormat::RGBA8Unorm, width, height);
+    renderTarget->setTargetTextureView(texture->textureView(),
+                                       texture->texture());
+
+    auto renderImage = make_rcp<RiveRenderImage>(std::move(texture));
+
+    return make_rcp<RenderCanvas>(std::move(renderImage),
+                                  std::move(renderTarget));
+}
+
 class RenderBufferWebGPUImpl : public RenderBuffer
 {
 public:
@@ -3519,22 +3548,17 @@ void RenderContextWebGPUImpl::flush(const FlushDescriptor& desc)
                 renderTarget->m_targetTexture.Get());
         }
 #endif
-        uint64_t pipelineKey = gpu::ShaderUniqueKey(drawType,
-                                                    batch.shaderFeatures,
-                                                    desc.interlockMode,
-                                                    batch.shaderMiscFlags);
+        uint64_t pipelineKey =
+            gpu::pipeline_unique_key(drawType,
+                                     batch.shaderFeatures,
+                                     desc.interlockMode,
+                                     batch.shaderMiscFlags,
+                                     batch.drawContents,
+                                     desc.fixedFunctionColorOutput,
+                                     batch.firstBlendMode,
+                                     platformFeatures());
 
-        assert(pipelineKey << PipelineState::UNIQUE_KEY_BIT_COUNT >>
-                   PipelineState::UNIQUE_KEY_BIT_COUNT ==
-               pipelineKey);
-        assert(pipelineState.uniqueKey <
-               1 << PipelineState::UNIQUE_KEY_BIT_COUNT);
-        pipelineKey = (pipelineKey << PipelineState::UNIQUE_KEY_BIT_COUNT) |
-                      pipelineState.uniqueKey;
-
-        assert(pipelineKey << 1 >> 1 == pipelineKey);
-        pipelineKey =
-            (pipelineKey << 1) | static_cast<uint32_t>(targetIsGLFBO0);
+        pipelineKey = math::add_bits_to_key(pipelineKey, targetIsGLFBO0, 1);
 
         const DrawPipeline& drawPipeline =
             m_drawPipelines

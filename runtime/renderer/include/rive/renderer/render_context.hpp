@@ -7,6 +7,7 @@
 #include "rive/math/vec2d.hpp"
 #include "rive/renderer/gpu.hpp"
 #include "rive/renderer/rive_render_factory.hpp"
+#include "rive/renderer/render_canvas.hpp"
 #include "rive/renderer/render_target.hpp"
 #include "rive/renderer/sk_rectanizer_skyline.hpp"
 #include "rive/renderer/trivial_block_allocator.hpp"
@@ -308,6 +309,10 @@ public:
                                        RenderBufferFlags,
                                        size_t) override;
     rcp<RenderImage> decodeImage(Span<const uint8_t>) override;
+
+    // Creates a RenderCanvas: a GPU texture usable as both a render target
+    // (for rendering into) and a render image (for compositing into draws).
+    rcp<RenderCanvas> makeRenderCanvas(uint32_t width, uint32_t height);
 
 private:
     friend class Draw;
@@ -748,6 +753,8 @@ private:
         friend class TessellationWriter;
 
         ClipInfo& getWritableClipInfo(uint32_t clipID);
+
+        void scheduleBarriersForNextDraw(BarrierFlags);
 
         // Either appends a new drawBatch to m_drawList or merges into
         // m_drawList.tail(). Updates the batch's ShaderFeatures according to

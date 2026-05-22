@@ -12,6 +12,7 @@
 #include "rive/data_bind/data_values/data_value_symbol_list_index.hpp"
 #include "rive/data_bind/data_values/data_value_asset_image.hpp"
 #include "rive/data_bind/data_values/data_value_artboard.hpp"
+#include "rive/data_bind/data_values/data_value_viewmodel.hpp"
 #include "rive/generated/core_registry.hpp"
 #include "rive/refcnt.hpp"
 
@@ -46,12 +47,18 @@ DataBindContextValue::DataBindContextValue(DataBind* dataBind) :
             {
                 auto viewmodelInstanceEnum =
                     source->as<ViewModelInstanceEnum>();
+                auto viewModelProperty =
+                    viewmodelInstanceEnum->viewModelProperty();
                 auto viewModelPropertyEnum =
-                    viewmodelInstanceEnum->viewModelProperty()
-                        ->as<ViewModelPropertyEnum>();
+                    viewModelProperty != nullptr &&
+                            viewModelProperty->is<ViewModelPropertyEnum>()
+                        ? viewModelProperty->as<ViewModelPropertyEnum>()
+                        : nullptr;
                 m_dataValue =
                     new DataValueEnum(viewmodelInstanceEnum->propertyValue(),
-                                      viewModelPropertyEnum->dataEnum());
+                                      viewModelPropertyEnum != nullptr
+                                          ? viewModelPropertyEnum->dataEnum()
+                                          : nullptr);
             }
             break;
             case ViewModelInstanceTriggerBase::typeKey:
@@ -71,6 +78,9 @@ DataBindContextValue::DataBindContextValue(DataBind* dataBind) :
             case ViewModelInstanceArtboardBase::typeKey:
                 m_dataValue = new DataValueArtboard(
                     source->as<ViewModelInstanceArtboard>()->propertyValue());
+                break;
+            case ViewModelInstanceViewModelBase::typeKey:
+                m_dataValue = new DataValueViewModel();
                 break;
             default:
                 m_dataValue = new DataValue();
@@ -132,6 +142,12 @@ void DataBindContextValue::syncSourceValue()
             case ViewModelInstanceArtboardBase::typeKey:
                 m_dataValue->as<DataValueArtboard>()->value(
                     source->as<ViewModelInstanceArtboard>()->propertyValue());
+                break;
+            case ViewModelInstanceViewModelBase::typeKey:
+                m_dataValue->as<DataValueViewModel>()->value(
+                    source->as<ViewModelInstanceViewModel>()
+                        ->referenceViewModelInstance()
+                        .get());
                 break;
         }
     }
@@ -207,6 +223,13 @@ void DataBindContextValue::applyToSource(Core* component,
             calculateValueAndApply<DataValueInteger,
                                    uint32_t,
                                    ViewModelInstanceArtboard>(isMainDirection);
+        }
+        break;
+        case ViewModelInstanceViewModelBase::typeKey:
+        {
+            calculateValueAndApply<DataValueViewModel,
+                                   ViewModelInstance*,
+                                   ViewModelInstanceViewModel>(isMainDirection);
         }
         break;
     }

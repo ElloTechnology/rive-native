@@ -1,3 +1,4 @@
+#include "rive/animation/listener_invocation.hpp"
 #include "rive/animation/state_machine_listener.hpp"
 #include "rive/constraints/scrolling/scroll_bar_constraint.hpp"
 #include "rive/constraints/scrolling/scroll_constraint.hpp"
@@ -90,27 +91,24 @@ void ListenerGroup::disable(int pointerId)
 
 bool ListenerGroup::canEarlyOut(Component* drawable)
 {
-    auto listenerType = m_listener->listenerType();
-    return !(listenerType == ListenerType::enter ||
-             listenerType == ListenerType::exit ||
-             listenerType == ListenerType::move ||
-             listenerType == ListenerType::drag);
+    return !(m_listener->hasListener(ListenerType::enter) ||
+             m_listener->hasListener(ListenerType::exit) ||
+             m_listener->hasListener(ListenerType::move) ||
+             m_listener->hasListener(ListenerType::drag));
 }
 
 bool ListenerGroup::needsDownListener(Component* drawable)
 {
-    auto listenerType = m_listener->listenerType();
-    return listenerType == ListenerType::down ||
-           listenerType == ListenerType::click ||
-           listenerType == ListenerType::drag;
+    return m_listener->hasListener(ListenerType::down) ||
+           m_listener->hasListener(ListenerType::click) ||
+           m_listener->hasListener(ListenerType::drag);
 }
 
 bool ListenerGroup::needsUpListener(Component* drawable)
 {
-    auto listenerType = m_listener->listenerType();
-    return listenerType == ListenerType::up ||
-           listenerType == ListenerType::click ||
-           listenerType == ListenerType::drag;
+    return m_listener->hasListener(ListenerType::up) ||
+           m_listener->hasListener(ListenerType::click) ||
+           m_listener->hasListener(ListenerType::drag);
 }
 
 ProcessEventResult ListenerGroup::processEvent(
@@ -179,53 +177,51 @@ ProcessEventResult ListenerGroup::processEvent(
         m_hasDragged = false;
     }
     auto _listener = listener();
+    bool shouldPerformChanges = false;
+    auto listenerTypeMatched = hitEvent;
     // Always update hover states regardless of which specific listener type
     // we're trying to trigger.
     // If hover has changed and:
     // - it's hovering and the listener is of type enter
     // - it's not hovering and the listener is of type exit
-    if (hoverChange &&
-        ((isGroupHovered && _listener->listenerType() == ListenerType::enter) ||
-         (!isGroupHovered && _listener->listenerType() == ListenerType::exit)))
+    if (hoverChange)
     {
-        _listener->performChanges(
-            stateMachineInstance,
-            position,
-            Vec2D(previousPosition->x, previousPosition->y),
-            pointerId);
-        stateMachineInstance->markNeedsAdvance();
-        consume();
+        if (isGroupHovered && _listener->hasListener(ListenerType::enter))
+        {
+            shouldPerformChanges = true;
+            listenerTypeMatched = ListenerType::enter;
+        }
+        else if ((!isGroupHovered &&
+                  _listener->hasListener(ListenerType::exit)))
+        {
+            shouldPerformChanges = true;
+            listenerTypeMatched = ListenerType::exit;
+        }
     }
     // Perform changes if:
     // - the click gesture is complete and the listener is of type click
     // - the event type matches the listener type and it is hovering the
     // group
-    if ((pointer->phase == GestureClickPhase::clicked &&
-         _listener->listenerType() == ListenerType::click) ||
-        (isGroupHovered && hitEvent == _listener->listenerType()))
+    if (pointer->phase == GestureClickPhase::clicked &&
+        _listener->hasListener(ListenerType::click))
     {
-        _listener->performChanges(
-            stateMachineInstance,
-            position,
-            Vec2D(previousPosition->x, previousPosition->y),
-            pointerId);
-        stateMachineInstance->markNeedsAdvance();
-        consume();
+        shouldPerformChanges = true;
+        listenerTypeMatched = ListenerType::click;
+    }
+    else if (isGroupHovered && _listener->hasListener(hitEvent))
+    {
+        shouldPerformChanges = true;
     }
     // Perform changes if:
     // - the listener type is drag
     // - the clickPhase is down
     // - the pointer type is move
     if (pointer->phase == GestureClickPhase::down &&
-        _listener->listenerType() == ListenerType::drag &&
+        _listener->hasListener(ListenerType::drag) &&
         hitEvent == ListenerType::move)
     {
-        _listener->performChanges(
-            stateMachineInstance,
-            position,
-            Vec2D(previousPosition->x, previousPosition->y),
-            pointerId);
-        stateMachineInstance->markNeedsAdvance();
+        shouldPerformChanges = true;
+        listenerTypeMatched = ListenerType::drag;
         if (!m_hasDragged)
         {
             stateMachineInstance->dragStart(position,
@@ -234,6 +230,19 @@ ProcessEventResult ListenerGroup::processEvent(
                                             pointerId);
             m_hasDragged = true;
         }
+    }
+    if (shouldPerformChanges)
+    {
+
+        _listener->performChanges(
+            stateMachineInstance,
+            ListenerInvocation::pointer(
+                position,
+                Vec2D(previousPosition->x, previousPosition->y),
+                pointerId,
+                listenerTypeMatched,
+                timeStamp));
+        stateMachineInstance->markNeedsAdvance();
         consume();
     }
     previousPosition->x = position.x;

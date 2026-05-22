@@ -31,6 +31,10 @@ late js.JSFunction _disableFallbackFonts;
 late js.JSFunction _enableFallbackFonts;
 late js.JSFunction _convertStringToNumber;
 late js.JSFunction _convertIntToNumber;
+late js.JSFunction _fontHasColorGlyphs;
+late js.JSFunction _fontIsColorGlyph;
+late js.JSFunction _getColorGlyphLayers;
+late js.JSFunction _deleteColorGlyphBuffer;
 
 class TextEngine {
   static void link(js.JSObject module) {
@@ -56,6 +60,10 @@ class TextEngine {
     _enableFallbackFonts = module['enableFallbackFonts'] as js.JSFunction;
     _convertStringToNumber = module['convertStringToNumber'] as js.JSFunction;
     _convertIntToNumber = module['convertIntToNumber'] as js.JSFunction;
+    _fontHasColorGlyphs = module['fontHasColorGlyphs'] as js.JSFunction;
+    _fontIsColorGlyph = module['fontIsColorGlyph'] as js.JSFunction;
+    _getColorGlyphLayers = module['getColorGlyphLayers'] as js.JSFunction;
+    _deleteColorGlyphBuffer = module['deleteColorGlyphBuffer'] as js.JSFunction;
   }
 }
 
@@ -68,6 +76,23 @@ class RawPathWasm extends RawPath {
 
   @override
   void dispose() => _deleteGlyphPath.callAsFunction(null, pointer);
+
+  @override
+  Iterator<RawPathCommand> get iterator => RawPathIterator._(verbs, points);
+}
+
+/// A RawPath backed by Dart-side typed data with no native allocation to free.
+/// Used for color glyph layers deserialized from a binary buffer.
+class BufferRawPathWasm extends RawPath {
+  final Uint8List verbs;
+  final Float32List points;
+
+  BufferRawPathWasm({required this.verbs, required this.points});
+
+  @override
+  void dispose() {
+    // No native memory to free — data is Dart-managed.
+  }
 
   @override
   Iterator<RawPathCommand> get iterator => RawPathIterator._(verbs, points);
@@ -145,10 +170,10 @@ class RawPathIterator implements Iterator<RawPathCommand> {
 
   @override
   RawPathCommand get current => RawPathCommandWasm._(
-    _verb,
-    points,
-    (_ptIndex + _ptsBacksetForVerb(_verb)) * 2,
-  );
+        _verb,
+        points,
+        (_ptIndex + _ptsBacksetForVerb(_verb)) * 2,
+      );
 
   @override
   bool moveNext() {
@@ -187,14 +212,14 @@ class GlyphLineWasm extends GlyphLine {
   final double bottom;
 
   GlyphLineWasm(ByteData data)
-    : startRun = data.getUint32(0, Endian.little),
-      startIndex = data.getUint32(4, Endian.little),
-      endRun = data.getUint32(8, Endian.little),
-      endIndex = data.getUint32(12, Endian.little),
-      startX = data.getFloat32(16, Endian.little),
-      top = data.getFloat32(20, Endian.little),
-      baseline = data.getFloat32(24, Endian.little),
-      bottom = data.getFloat32(28, Endian.little);
+      : startRun = data.getUint32(0, Endian.little),
+        startIndex = data.getUint32(4, Endian.little),
+        endRun = data.getUint32(8, Endian.little),
+        endIndex = data.getUint32(12, Endian.little),
+        startX = data.getFloat32(16, Endian.little),
+        top = data.getFloat32(20, Endian.little),
+        baseline = data.getFloat32(24, Endian.little),
+        bottom = data.getFloat32(28, Endian.little);
 
   @override
   String toString() {
@@ -248,15 +273,13 @@ class TextShapeResultWasm extends TextShapeResult {
     TextAlign alignment,
     TextWrap wrap,
   ) {
-    var result =
-        _breakLines.callAsFunction(
-              null,
-              shapeResultPtr.toJS,
-              width.toJS,
-              alignment.index.toJS,
-              wrap.index.toJS,
-            )
-            as js.JSObject;
+    var result = _breakLines.callAsFunction(
+      null,
+      shapeResultPtr.toJS,
+      width.toJS,
+      alignment.index.toJS,
+      wrap.index.toJS,
+    ) as js.JSObject;
 
     var rawResult = (result['rawResult'] as js.JSNumber).toDartInt;
 
@@ -269,11 +292,9 @@ class TextShapeResultWasm extends TextShapeResult {
       var lines = <GlyphLine>[];
 
       var end = sublist.data.offsetInBytes + sublist.size * lineSize;
-      for (
-        var lineOffset = sublist.data.offsetInBytes;
-        lineOffset < end;
-        lineOffset += lineSize
-      ) {
+      for (var lineOffset = sublist.data.offsetInBytes;
+          lineOffset < end;
+          lineOffset += lineSize) {
         lines.add(GlyphLineWasm(RiveWasm.heapDataView(lineOffset)));
       }
       paragraphsLines.add(lines);
@@ -336,8 +357,8 @@ class WasmDynamicArray {
   WasmDynamicArray(this.ptr, this.size);
 
   ByteData get data => RiveWasm.heapDataView(
-    ptr,
-  ); // Don't pass size here as that's the size of the dynamic object.
+        ptr,
+      ); // Don't pass size here as that's the size of the dynamic object.
 }
 
 class LinesWasm extends ListBase<GlyphLineWasm> {
@@ -350,8 +371,7 @@ class LinesWasm extends ListBase<GlyphLineWasm> {
 
   @override
   GlyphLineWasm operator [](int index) {
-    const lineSize =
-        4 + //startRun
+    const lineSize = 4 + //startRun
         4 + // startIndex
         4 + // endRun
         4 + // endIndex
@@ -391,11 +411,9 @@ class ParagraphWasm extends Paragraph {
     var runsPointer = data.getUint32(0, Endian.little);
     var runsCount = data.getUint32(4, Endian.little);
 
-    for (
-      int i = 0, runPointer = runsPointer;
-      i < runsCount;
-      i++, runPointer += runSize
-    ) {
+    for (int i = 0, runPointer = runsPointer;
+        i < runsCount;
+        i++, runPointer += runSize) {
       runs.add(GlyphRunWasm(RiveWasm.heapDataView(runPointer)));
     }
     return ParagraphWasm._(level, data, runs);
@@ -435,17 +453,17 @@ class GlyphRunWasm extends GlyphRun {
   final double letterSpacing;
 
   GlyphRunWasm(this.byteData)
-    : font = FontWasm.fromAddress(byteData.getUint32(0, Endian.little)),
-      fontSize = byteData.getFloat32(4, Endian.little),
-      lineHeight = byteData.getFloat32(8, Endian.little),
-      letterSpacing = byteData.getFloat32(12, Endian.little),
-      glyphs = byteData.readUint16List(16),
-      textIndices = byteData.readUint32List(24),
-      advances = byteData.readFloat32List(32),
-      xPositions = byteData.readFloat32List(40),
-      offsets = byteData.readVec2DList(48),
-      styleId = byteData.getUint16(64, Endian.little),
-      level = byteData.getUint8(66);
+      : font = FontWasm.fromAddress(byteData.getUint32(0, Endian.little)),
+        fontSize = byteData.getFloat32(4, Endian.little),
+        lineHeight = byteData.getFloat32(8, Endian.little),
+        letterSpacing = byteData.getFloat32(12, Endian.little),
+        glyphs = byteData.readUint16List(16),
+        textIndices = byteData.readUint32List(24),
+        advances = byteData.readFloat32List(32),
+        xPositions = byteData.readFloat32List(40),
+        offsets = byteData.readVec2DList(48),
+        styleId = byteData.getUint16(64, Endian.little),
+        level = byteData.getUint8(66);
 
   @override
   int get glyphCount => glyphs.length;
@@ -494,9 +512,8 @@ class FontWasm extends Font {
 
   @override
   RawPath extractGlyphPath(int glyphId) {
-    var object =
-        _makeGlyphPath.callAsFunction(null, fontPtr.toJS, glyphId.toJS)
-            as js.JSObject;
+    var object = _makeGlyphPath.callAsFunction(null, fontPtr.toJS, glyphId.toJS)
+        as js.JSObject;
     var rawPathPtr = (object['rawPath'] as js.JSNumber).toDartInt;
 
     // The buffer for these share the WASM heap buffer, which is efficient but
@@ -535,19 +552,17 @@ class FontWasm extends Font {
       writer.writeUint8(0); // padding to word align struct
     }
 
-    var result =
-        _shapeText.callAsFunction(
-              null,
-              Uint32List.fromList(codeUnits).toJS,
-              writer.uint8Buffer.toJS,
-              (direction == null
-                      ? -1
-                      : direction == TextDirection.ltr
-                      ? 0
-                      : 1)
-                  .toJS,
-            )
-            as js.JSObject;
+    var result = _shapeText.callAsFunction(
+      null,
+      Uint32List.fromList(codeUnits).toJS,
+      writer.uint8Buffer.toJS,
+      (direction == null
+              ? -1
+              : direction == TextDirection.ltr
+                  ? 0
+                  : 1)
+          .toJS,
+    ) as js.JSObject;
     final rawResult = (result['rawResult'] as js.JSNumber).toDartInt;
     final results = (result['results'] as js.JSDataView).toDart;
 
@@ -558,11 +573,9 @@ class FontWasm extends Font {
     var paragraphList = <ParagraphWasm>[];
     const paragraphSize = 12; // runs = 8, direction = 1, padding = 3
 
-    for (
-      int i = 0;
-      i < paragraphsSize;
-      i++, paragraphsPointer += paragraphSize
-    ) {
+    for (int i = 0;
+        i < paragraphsSize;
+        i++, paragraphsPointer += paragraphSize) {
       final paragraphView = RiveWasm.heapDataView(paragraphsPointer);
       paragraphList.add(ParagraphWasm(paragraphView));
     }
@@ -611,15 +624,13 @@ class FontWasm extends Font {
       featureWriter.writeUint32(feature.value);
     }
 
-    var ptr =
-        (_makeFontWithOptions.callAsFunction(
-                  null,
-                  fontPtr.toJS,
-                  coordsWriter.uint8Buffer.toJS,
-                  featureWriter.uint8Buffer.toJS,
-                )
-                as js.JSNumber)
-            .toDartInt;
+    var ptr = (_makeFontWithOptions.callAsFunction(
+      null,
+      fontPtr.toJS,
+      coordsWriter.uint8Buffer.toJS,
+      featureWriter.uint8Buffer.toJS,
+    ) as js.JSNumber)
+        .toDartInt;
     if (ptr == 0) {
       return null;
     }
@@ -635,6 +646,175 @@ class FontWasm extends Font {
   double get descent =>
       (_fontDescent.callAsFunction(null, fontPtr.toJS) as js.JSNumber)
           .toDartDouble;
+
+  @override
+  bool get hasColorGlyphs =>
+      (_fontHasColorGlyphs.callAsFunction(null, fontPtr.toJS) as js.JSBoolean)
+          .toDart;
+
+  @override
+  bool isColorGlyph(int glyphId) =>
+      (_fontIsColorGlyph.callAsFunction(null, fontPtr.toJS, glyphId.toJS)
+              as js.JSBoolean)
+          .toDart;
+
+  @override
+  List<ColorGlyphLayer> getColorLayers(int glyphId,
+      {int foregroundColor = 0xFF000000}) {
+    // Use the scratch buffer for the 4-byte outSize parameter.
+    final outSizePtr = RiveWasm.scratchBufferPtr;
+
+    final bufferPtr = (_getColorGlyphLayers.callAsFunction(null, fontPtr.toJS,
+            glyphId.toJS, foregroundColor.toJS, outSizePtr) as js.JSNumber)
+        .toDartInt;
+
+    final size = RiveWasm.scratchBufferByteData.getUint32(0, Endian.little);
+
+    if (bufferPtr == 0 || size == 0) {
+      return const [];
+    }
+
+    try {
+      final data = RiveWasm.heapDataView(bufferPtr, size);
+      int offset = 0;
+
+      final layerCount = data.getUint32(offset, Endian.little);
+      offset += 4;
+
+      final layers = <ColorGlyphLayer>[];
+      for (int i = 0; i < layerCount; i++) {
+        final paintType = ColorGlyphPaintType.values[data.getUint8(offset)];
+        offset += 1;
+
+        if (paintType == ColorGlyphPaintType.image) {
+          // Image layer deserialization.
+          offset = (offset + 3) & ~3; // align to 4
+          final imageWidth = data.getUint32(offset, Endian.little);
+          offset += 4;
+          final imageHeight = data.getUint32(offset, Endian.little);
+          offset += 4;
+          final imageBearingX =
+              data.getFloat32(offset, Endian.little).toDouble();
+          offset += 4;
+          final imageBearingY =
+              data.getFloat32(offset, Endian.little).toDouble();
+          offset += 4;
+          final imageExtentX =
+              data.getFloat32(offset, Endian.little).toDouble();
+          offset += 4;
+          final imageExtentY =
+              data.getFloat32(offset, Endian.little).toDouble();
+          offset += 4;
+          final imageByteLength = data.getUint32(offset, Endian.little);
+          offset += 4;
+          final imageBytes = Uint8List(imageByteLength);
+          for (int b = 0; b < imageByteLength; b++) {
+            imageBytes[b] = data.getUint8(offset + b);
+          }
+          offset += imageByteLength;
+          offset = (offset + 3) & ~3; // pad to 4
+
+          layers.add(ColorGlyphLayer(
+            paintType: paintType,
+            imageBytes: imageBytes,
+            imageWidth: imageWidth,
+            imageHeight: imageHeight,
+            imageBearingX: imageBearingX,
+            imageBearingY: imageBearingY,
+            imageExtentX: imageExtentX,
+            imageExtentY: imageExtentY,
+          ));
+        } else {
+          final useForeground = data.getUint8(offset) != 0;
+          offset += 1;
+
+          final stopCount = data.getUint16(offset, Endian.little);
+          offset += 2;
+
+          final color = data.getUint32(offset, Endian.little);
+          offset += 4;
+
+          final verbCount = data.getUint16(offset, Endian.little);
+          offset += 2;
+
+          final pointCount = data.getUint16(offset, Endian.little);
+          offset += 2;
+
+          final points = Float32List(pointCount * 2);
+          for (int p = 0; p < pointCount * 2; p++) {
+            points[p] = data.getFloat32(offset, Endian.little);
+            offset += 4;
+          }
+
+          final verbs = Uint8List(verbCount);
+          for (int v = 0; v < verbCount; v++) {
+            verbs[v] = data.getUint8(offset);
+            offset += 1;
+          }
+
+          // Skip padding to 4-byte alignment.
+          offset = (offset + 3) & ~3;
+
+          // Read gradient stops if present.
+          final stops = <GradientStop>[];
+          double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+          double r0 = 0, r1 = 0;
+          double startAngle = 0, endAngle = 0;
+          if (stopCount > 0) {
+            final offsets = Float64List(stopCount);
+            final colors = List<int>.filled(stopCount, 0);
+            for (int s = 0; s < stopCount; s++) {
+              offsets[s] = data.getFloat32(offset, Endian.little);
+              offset += 4;
+            }
+            for (int s = 0; s < stopCount; s++) {
+              colors[s] = data.getUint32(offset, Endian.little);
+              offset += 4;
+            }
+            for (int s = 0; s < stopCount; s++) {
+              stops.add(GradientStop(offsets[s], colors[s]));
+            }
+            x0 = data.getFloat32(offset, Endian.little);
+            offset += 4;
+            y0 = data.getFloat32(offset, Endian.little);
+            offset += 4;
+            x1 = data.getFloat32(offset, Endian.little);
+            offset += 4;
+            y1 = data.getFloat32(offset, Endian.little);
+            offset += 4;
+            r0 = data.getFloat32(offset, Endian.little);
+            offset += 4;
+            r1 = data.getFloat32(offset, Endian.little);
+            offset += 4;
+            startAngle = data.getFloat32(offset, Endian.little);
+            offset += 4;
+            endAngle = data.getFloat32(offset, Endian.little);
+            offset += 4;
+          }
+
+          layers.add(ColorGlyphLayer(
+            path: BufferRawPathWasm(verbs: verbs, points: points),
+            paintType: paintType,
+            color: color,
+            useForeground: useForeground,
+            stops: stops,
+            x0: x0,
+            y0: y0,
+            x1: x1,
+            y1: y1,
+            r0: r0,
+            r1: r1,
+            startAngle: startAngle,
+            endAngle: endAngle,
+          ));
+        }
+      }
+
+      return layers;
+    } finally {
+      _deleteColorGlyphBuffer.callAsFunction(null, bufferPtr.toJS);
+    }
+  }
 }
 
 class FontAxisWasm extends FontAxis {
@@ -675,16 +855,15 @@ class FontAxisIterator implements Iterator<FontAxis> {
   int axisIndex = -1;
 
   FontAxisIterator(this.fontPtr)
-    : axisCount =
-          (_fontAxisCount.callAsFunction(null, fontPtr.toJS) as js.JSNumber)
-              .toDartInt;
+      : axisCount =
+            (_fontAxisCount.callAsFunction(null, fontPtr.toJS) as js.JSNumber)
+                .toDartInt;
 
   @override
   FontAxis get current {
-    var array =
-        (_fontAxis.callAsFunction(null, fontPtr.toJS, axisIndex.toJS)
-                as js.JSArray)
-            .toDart;
+    var array = (_fontAxis.callAsFunction(null, fontPtr.toJS, axisIndex.toJS)
+            as js.JSArray)
+        .toDart;
 
     return FontAxisWasm(
       (array[0] as js.JSNumber).toDartInt,

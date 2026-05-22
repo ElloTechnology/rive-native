@@ -1,6 +1,10 @@
 #include "rive/artboard.hpp"
+#include "rive/animation/keyframe_interpolator.hpp"
 #include "rive/artboard_component_list.hpp"
 #include "rive/backboard.hpp"
+#include "rive/focus_data.hpp"
+#include "rive/input/focus_manager.hpp"
+#include "rive/input/focusable.hpp"
 #include "rive/animation/linear_animation_instance.hpp"
 #include "rive/custom_property_trigger.hpp"
 #include "rive/dependency_sorter.hpp"
@@ -22,12 +26,15 @@
 #include "rive/nested_artboard.hpp"
 #include "rive/nested_artboard_leaf.hpp"
 #include "rive/nested_artboard_layout.hpp"
+#include "rive/animation/nested_state_machine.hpp"
 #include "rive/joystick.hpp"
 #include "rive/data_bind/data_bind.hpp"
 #include "rive/data_bind_flags.hpp"
 #include "rive/animation/nested_bool.hpp"
 #include "rive/animation/nested_number.hpp"
 #include "rive/animation/nested_trigger.hpp"
+#include "rive/viewmodel/viewmodel_instance.hpp"
+#include "rive/viewmodel/viewmodel_instance_value.hpp"
 #include "rive/animation/state_machine_input_instance.hpp"
 #include "rive/animation/state_machine_instance.hpp"
 #include "rive/shapes/shape.hpp"
@@ -39,6 +46,7 @@
 #include "rive/profiler/profiler_macros.h"
 #include "rive/scripted/scripted_object.hpp"
 
+#include <set>
 #include <unordered_map>
 
 using namespace rive;
@@ -56,6 +64,11 @@ Artboard::Artboard()
 
 Artboard::~Artboard()
 {
+    // NOTE: Do NOT call cleanupFocusTree() here! The FocusManager is owned by
+    // StateMachineInstance which may already be destroyed before the Artboard.
+    // Focus cleanup should be done explicitly via cleanupFocusTree() before
+    // the artboard is recycled/destroyed (e.g., in ArtboardComponentList).
+
 #ifdef WITH_RIVE_AUDIO
 #ifdef EXTERNAL_RIVE_AUDIO_ENGINE
     auto audioEngine = m_audioEngine;
@@ -68,10 +81,73 @@ Artboard::~Artboard()
     }
 #endif
     unbind();
+
+    // ViewModelInstance and ViewModelInstanceValue inherit from RefCnt.
+    //
+    // ViewModelInstance (VMI) ownership rules:
+    // - VMIs in the component hierarchy (parent() != nullptr) are expected to
+    //   be owned externally and must NOT be released here.
+    // - VMIs not in the component hierarchy are released by the artboard, but
+    //   AFTER hierarchy components are destroyed to avoid use-after-free. This
+    //   applies to both source and cloned artboards (e.g., artboard instances
+    //   created by ArtboardComponentList).
+    //
+    // ViewModelInstanceValue (VMV) ownership: always owned by their parent
+    // ViewModelInstance via rcp<> in m_PropertyValues. When VMI is deleted,
+    // its destructor clears m_PropertyValues, which unrefs and deletes VMVs.
+    //
+    // Strategy:
+    // 1) Identify VMI/VMV objects by pointer (safe is<>() check BEFORE any
+    // deletions).
+    // 2) Delete everything else immediately, deferring VMI unref until after
+    // hierarchy components are gone.
+    std::set<Core*> vmObjects;
+    std::set<ViewModelInstance*> deferredVmiUnrefs;
+
+    // First pass: identify ViewModelInstance and ViewModelInstanceValue
+    // objects while memory is valid (before any deletions). Precompute which
+    // VMIs should be released so we never dereference pointers after deletes.
+    auto gatherVmObjects = [&](Core* object) {
+        if (object == nullptr || object == this)
+        {
+            return;
+        }
+        if (object->is<ViewModelInstance>())
+        {
+            vmObjects.insert(object);
+            auto vmi = object->as<ViewModelInstance>();
+            if (vmi->parent() == nullptr)
+            {
+                deferredVmiUnrefs.insert(vmi);
+            }
+            return;
+        }
+        if (object->is<ViewModelInstanceValue>())
+        {
+            vmObjects.insert(object);
+        }
+    };
     for (auto object : m_Objects)
     {
-        // First object is artboard
-        if (object == this)
+        gatherVmObjects(object);
+    }
+    for (auto object : m_invalidObjects)
+    {
+        gatherVmObjects(object);
+    }
+
+    auto isVmObject = [&](Core* object) -> bool {
+        return vmObjects.count(object) != 0;
+    };
+
+    // Second pass: delete non-VM objects.
+    for (auto object : m_Objects)
+    {
+        if (object == nullptr || object == this)
+        {
+            continue;
+        }
+        if (isVmObject(object))
         {
             continue;
         }
@@ -79,7 +155,23 @@ Artboard::~Artboard()
     }
     for (auto object : m_invalidObjects)
     {
+        if (object == nullptr)
+        {
+            continue;
+        }
+        if (isVmObject(object))
+        {
+            continue;
+        }
         delete object;
+    }
+
+    // Now release deferred ViewModelInstances (both source and clone artboards)
+    // after hierarchy components have been destroyed. Releasing via unref()
+    // keeps RefCnt ownership semantics intact.
+    for (auto* vmi : deferredVmiUnrefs)
+    {
+        vmi->unref();
     }
 
     deleteDataBinds();
@@ -1621,6 +1713,272 @@ std::string Artboard::animationNameAt(size_t index) const
     return la ? la->name() : "";
 }
 
+// Helper: check if a FocusData has a parent FocusData within the artboard
+// by walking up the component hierarchy
+static bool hasParentFocusData(const FocusData* focusData)
+{
+    // FocusData's parent is a ContainerComponent (likely a Node)
+    // Walk up to find if any ancestor Node has a FocusData child
+    auto* current = focusData->parent();
+    while (current != nullptr)
+    {
+        if (current->is<Node>())
+        {
+            auto* node = current->as<Node>();
+            for (auto child : node->children())
+            {
+                if (child->is<FocusData>() && child != focusData)
+                {
+                    return true;
+                }
+            }
+        }
+        current = current->parent();
+    }
+    return false;
+}
+
+size_t Artboard::rootFocusDataCount() const
+{
+    size_t count = 0;
+    for (auto* object : m_Objects)
+    {
+        if (object != nullptr && object->is<FocusData>())
+        {
+            if (!hasParentFocusData(object->as<FocusData>()))
+            {
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
+FocusData* Artboard::rootFocusDataAt(size_t index) const
+{
+    size_t count = 0;
+    for (auto* object : m_Objects)
+    {
+        if (object != nullptr && object->is<FocusData>())
+        {
+            if (!hasParentFocusData(object->as<FocusData>()))
+            {
+                if (count == index)
+                {
+                    return object->as<FocusData>();
+                }
+                count++;
+            }
+        }
+    }
+    return nullptr;
+}
+
+void Artboard::buildFocusTree(FocusManager* focusManager,
+                              rcp<FocusNode> parentFocusNode)
+{
+    if (focusManager == nullptr)
+    {
+        return;
+    }
+
+    // Store reference to the active focus manager
+    setActiveFocusManager(focusManager);
+
+#ifdef WITH_RIVE_TOOLS
+    // Store the parent focus node if provided (for later retrieval by tools)
+    if (parentFocusNode != nullptr)
+    {
+        m_externalParentFocusNode = parentFocusNode;
+    }
+    // Use explicit parent if provided, otherwise fall back to external parent
+    rcp<FocusNode> effectiveParent = parentFocusNode != nullptr
+                                         ? parentFocusNode
+                                         : m_externalParentFocusNode;
+#else
+    rcp<FocusNode> effectiveParent = parentFocusNode;
+#endif
+
+    // Register all FocusData in this artboard
+    for (auto* obj : m_Objects)
+    {
+        if (obj != nullptr && obj->is<FocusData>())
+        {
+            auto* fd = obj->as<FocusData>();
+            auto* localParent = fd->findParentFocusData();
+
+            rcp<FocusNode> parentNode = localParent != nullptr
+                                            ? localParent->focusNode()
+                                            : effectiveParent;
+
+            focusManager->addChild(parentNode, fd->focusNode());
+        }
+    }
+    // Propagate focus registration to nested artboards that might have been
+    // created before this artboard's focusManager was available. This handles
+    // ArtboardComponentList and NestedArtboard items that were initialized
+    // before the parent StateMachineInstance was created.
+    //
+    // We check if the nested artboard's focusManager is DIFFERENT from ours.
+    // If it is, that means it created its own internal focusManager when it
+    // should be sharing the parent's. We rebuild its focus tree with the
+    // correct shared focusManager.
+
+    // Handle NestedArtboard instances
+    for (auto* nestedArtboardHost : m_NestedArtboards)
+    {
+        // Find closest focus node (handles artboard boundaries)
+        auto hostParentNode =
+            FocusData::findClosestFocusNode(nestedArtboardHost);
+        if (hostParentNode == nullptr)
+        {
+            hostParentNode = effectiveParent;
+        }
+
+        auto* nestedArtboard = nestedArtboardHost->artboardInstance(0);
+        if (nestedArtboard != nullptr &&
+            nestedArtboard->focusManager() != focusManager)
+        {
+            // Clean up old focus tree if it exists (with wrong focusManager)
+            nestedArtboard->cleanupFocusTree();
+            nestedArtboard->buildFocusTree(focusManager, hostParentNode);
+        }
+
+        // Also update the external focus manager on any nested state machines.
+        // This handles the case where initializeAnimation was called before
+        // the parent artboard had a focus manager.
+        for (auto* animation : nestedArtboardHost->nestedAnimations())
+        {
+            if (animation->is<NestedStateMachine>())
+            {
+                auto* nsm = animation->as<NestedStateMachine>();
+                auto* smi = nsm->stateMachineInstance();
+                if (smi != nullptr && smi->focusManager() != focusManager)
+                {
+                    smi->setExternalFocusManager(focusManager);
+                }
+            }
+        }
+    }
+
+    // Handle ArtboardComponentList instances
+    for (auto* componentList : m_ComponentLists)
+    {
+        // Find closest focus node (handles artboard boundaries)
+        auto hostParentNode = FocusData::findClosestFocusNode(componentList);
+        if (hostParentNode == nullptr)
+        {
+            hostParentNode = effectiveParent;
+        }
+
+        for (size_t i = 0; i < componentList->artboardCount(); i++)
+        {
+            auto* nestedArtboard =
+                componentList->artboardInstance(static_cast<int>(i));
+            if (nestedArtboard != nullptr &&
+                nestedArtboard->focusManager() != focusManager)
+            {
+                // Clean up old focus tree if it exists (with wrong
+                // focusManager)
+                nestedArtboard->cleanupFocusTree();
+                nestedArtboard->buildFocusTree(focusManager, hostParentNode);
+            }
+
+            // Also update the state machine's external focus manager.
+            // This handles the case where linkStateMachine was called before
+            // the parent artboard had a focus manager.
+            auto* smi =
+                componentList->stateMachineInstance(static_cast<int>(i));
+            if (smi != nullptr && smi->focusManager() != focusManager)
+            {
+                smi->setExternalFocusManager(focusManager);
+            }
+        }
+    }
+}
+
+void Artboard::buildFocusTree(rcp<FocusNode> parentFocusNode)
+{
+    if (parentFocusNode == nullptr)
+    {
+        return;
+    }
+    auto* manager = parentFocusNode->manager();
+    if (manager == nullptr)
+    {
+        return;
+    }
+    buildFocusTree(manager, parentFocusNode);
+}
+
+void Artboard::cleanupFocusTree()
+{
+    if (m_activeFocusManager == nullptr)
+    {
+        return;
+    }
+
+    // Remove all FocusData's FocusNodes from the FocusManager
+    for (auto* obj : m_Objects)
+    {
+        if (obj != nullptr && obj->is<FocusData>())
+        {
+            auto* fd = obj->as<FocusData>();
+            // Only remove if the FocusNode was created (lazy initialization)
+            // and is still registered with THIS manager (defensive check for
+            // cases where auto-cleanup via FocusData destructor already ran)
+            auto node = fd->focusNode();
+            if (node != nullptr && node->manager() == m_activeFocusManager)
+            {
+                m_activeFocusManager->removeChild(node);
+            }
+        }
+    }
+
+    // Propagate cleanup to nested artboards that share our FocusManager
+    for (auto* nestedArtboardHost : m_NestedArtboards)
+    {
+        auto* nestedArtboard = nestedArtboardHost->artboardInstance(0);
+        if (nestedArtboard != nullptr &&
+            nestedArtboard->focusManager() == m_activeFocusManager)
+        {
+            nestedArtboard->cleanupFocusTree();
+        }
+    }
+
+    // Propagate cleanup to ArtboardComponentList items
+    for (auto* componentList : m_ComponentLists)
+    {
+        for (size_t i = 0; i < componentList->artboardCount(); i++)
+        {
+            auto* nestedArtboard =
+                componentList->artboardInstance(static_cast<int>(i));
+            if (nestedArtboard != nullptr &&
+                nestedArtboard->focusManager() == m_activeFocusManager)
+            {
+                nestedArtboard->cleanupFocusTree();
+            }
+        }
+    }
+
+    // Clear the active focus manager reference
+    m_activeFocusManager = nullptr;
+}
+
+#ifdef WITH_RIVE_TOOLS
+void Artboard::setExternalParentFocusNode(rcp<FocusNode> node)
+{
+    m_externalParentFocusNode = std::move(node);
+}
+
+rcp<FocusNode> Artboard::externalParentFocusNode() const
+{
+    return m_externalParentFocusNode;
+}
+
+void Artboard::collapseSingle(bool value) { Component::collapse(value); }
+#endif
+
 std::string Artboard::stateMachineNameAt(size_t index) const
 {
     auto sm = this->stateMachine(index);
@@ -1796,6 +2154,8 @@ StatusCode Artboard::import(ImportStack& importStack)
     return result;
 }
 
+void Artboard::buildDataContext(rcp<DataContext> value) {}
+
 void Artboard::internalDataContext(rcp<DataContext> value)
 {
     m_DataContext = value;
@@ -1818,6 +2178,32 @@ void Artboard::internalDataContext(rcp<DataContext> value)
 }
 
 void Artboard::rebind() { internalDataContext(m_DataContext); }
+
+void Artboard::relinkDataContext()
+{
+    if (m_DataContext == nullptr)
+    {
+        return;
+    }
+    for (auto artboardHost : m_ArtboardHosts)
+    {
+        rcp<ViewModelInstance> value =
+            m_DataContext->getViewModelInstance(artboardHost->dataBindPath());
+        if (value == nullptr)
+        {
+            value = m_DataContext->viewModelInstance();
+        }
+        artboardHost->relinkDataContext(value);
+    }
+}
+
+void Artboard::rebuildDataBind(DataBind* dataBind)
+{
+    if (dataBind->is<DataBindContext>())
+    {
+        dataBind->as<DataBindContext>()->bindFromContext(m_DataContext.get());
+    }
+};
 
 void Artboard::unbind()
 {
@@ -1942,30 +2328,28 @@ std::unique_ptr<LinearAnimationInstance> ArtboardInstance::animationAt(
     size_t index)
 {
     auto la = this->animation(index);
-    return la ? rivestd::make_unique<LinearAnimationInstance>(la, this)
-              : nullptr;
+    return la ? std::make_unique<LinearAnimationInstance>(la, this) : nullptr;
 }
 
 std::unique_ptr<LinearAnimationInstance> ArtboardInstance::animationNamed(
     const std::string& name)
 {
     auto la = this->animation(name);
-    return la ? rivestd::make_unique<LinearAnimationInstance>(la, this)
-              : nullptr;
+    return la ? std::make_unique<LinearAnimationInstance>(la, this) : nullptr;
 }
 
 std::unique_ptr<StateMachineInstance> ArtboardInstance::stateMachineAt(
     size_t index)
 {
     auto sm = this->stateMachine(index);
-    return sm ? rivestd::make_unique<StateMachineInstance>(sm, this) : nullptr;
+    return sm ? std::make_unique<StateMachineInstance>(sm, this) : nullptr;
 }
 
 std::unique_ptr<StateMachineInstance> ArtboardInstance::stateMachineNamed(
     const std::string& name)
 {
     auto sm = this->stateMachine(name);
-    return sm ? rivestd::make_unique<StateMachineInstance>(sm, this) : nullptr;
+    return sm ? std::make_unique<StateMachineInstance>(sm, this) : nullptr;
 }
 
 std::unique_ptr<StateMachineInstance> ArtboardInstance::defaultStateMachine()

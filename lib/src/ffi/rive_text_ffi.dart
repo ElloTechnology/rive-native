@@ -502,6 +502,34 @@ final void Function(Pointer<Void> font) deleteGlyphPath = _nativeLib
     .lookup<NativeFunction<Void Function(Pointer<Void>)>>('deleteGlyphPath')
     .asFunction();
 
+// Color glyph (emoji) support.
+
+final bool Function(Pointer<Void> font) fontHasColorGlyphs = _nativeLib
+    .lookup<NativeFunction<Bool Function(Pointer<Void>)>>('fontHasColorGlyphs')
+    .asFunction();
+
+final bool Function(Pointer<Void> font, int glyphId) fontIsColorGlyph =
+    _nativeLib
+        .lookup<NativeFunction<Bool Function(Pointer<Void>, Uint16)>>(
+            'fontIsColorGlyph')
+        .asFunction();
+
+// Returns a serialized binary buffer with all color glyph layers.
+// Writes the buffer size to outSize. Caller frees with deleteColorGlyphBuffer.
+final Pointer<Uint8> Function(Pointer<Void> font, int glyphId,
+        int foregroundColor, Pointer<Uint32> outSize) fontGetColorGlyphLayers =
+    _nativeLib
+        .lookup<
+            NativeFunction<
+                Pointer<Uint8> Function(Pointer<Void>, Uint16, Uint32,
+                    Pointer<Uint32>)>>('fontGetColorGlyphLayers')
+        .asFunction();
+
+final void Function(Pointer<Uint8> buffer) deleteColorGlyphBuffer = _nativeLib
+    .lookup<NativeFunction<Void Function(Pointer<Uint8>)>>(
+        'deleteColorGlyphBuffer')
+    .asFunction();
+
 final void Function() init =
     _nativeLib.lookup<NativeFunction<Void Function()>>('init').asFunction();
 
@@ -655,6 +683,62 @@ class RawPathFFI extends RawPath {
   Pointer<Void> get pointer => _native.rawPath;
 }
 
+/// A RawPath backed by Dart-side typed data (not native memory).
+/// Used for color glyph layers deserialized from a binary buffer.
+class BufferRawPath extends RawPath {
+  final Float32List points;
+  final Uint8List verbs;
+
+  BufferRawPath(this.points, this.verbs);
+
+  @override
+  Iterator<RawPathCommand> get iterator => _BufferRawPathIterator(this);
+
+  @override
+  void dispose() {
+    // No native memory to free — data is Dart-managed.
+  }
+}
+
+class _BufferRawPathCommand extends RawPathCommand {
+  final Float32List _points;
+  final int _pointOffset;
+
+  _BufferRawPathCommand(super.verb, this._points, this._pointOffset);
+
+  @override
+  Vec2D point(int index) {
+    final i = (_pointOffset + index) * 2;
+    return Vec2D.fromValues(_points[i], _points[i + 1]);
+  }
+}
+
+class _BufferRawPathIterator implements Iterator<RawPathCommand> {
+  final BufferRawPath _path;
+  int _verbIndex = -1;
+  int _ptIndex = -1;
+  RawPathVerb _verb = RawPathVerb.move;
+
+  _BufferRawPathIterator(this._path);
+
+  @override
+  _BufferRawPathCommand get current => _BufferRawPathCommand(
+        _verb,
+        _path.points,
+        _ptIndex + _ptsBacksetForVerb(_verb),
+      );
+
+  @override
+  bool moveNext() {
+    if (++_verbIndex < _path.verbs.length) {
+      _ptIndex += _ptsAdvanceAfterVerb(_verb);
+      _verb = _verbFromNative(_path.verbs[_verbIndex]);
+      return true;
+    }
+    return false;
+  }
+}
+
 class FontAxisIterator implements Iterator<FontAxis> {
   final Pointer<Void> fontPtr;
   final int axisCount;
@@ -773,6 +857,166 @@ class FontFFI extends Font {
   RawPath extractGlyphPath(int glyphId) {
     var glyphPath = makeGlyphPath(fontPtr, glyphId);
     return RawPathFFI._(glyphPath);
+  }
+
+  @override
+  bool get hasColorGlyphs => fontHasColorGlyphs(fontPtr);
+
+  @override
+  bool isColorGlyph(int glyphId) => fontIsColorGlyph(fontPtr, glyphId);
+
+  @override
+  List<ColorGlyphLayer> getColorLayers(int glyphId,
+      {int foregroundColor = 0xFF000000}) {
+    final outSize = calloc.allocate<Uint32>(sizeOf<Uint32>());
+    final bufferPtr =
+        fontGetColorGlyphLayers(fontPtr, glyphId, foregroundColor, outSize);
+    final size = outSize.value;
+    calloc.free(outSize);
+
+    if (bufferPtr == nullptr || size == 0) {
+      return const [];
+    }
+
+    try {
+      final buffer = bufferPtr.asTypedList(size);
+      final data = ByteData.sublistView(buffer);
+      int offset = 0;
+
+      final layerCount = data.getUint32(offset, Endian.host);
+      offset += 4;
+
+      final layers = <ColorGlyphLayer>[];
+      for (int i = 0; i < layerCount; i++) {
+        final paintType = ColorGlyphPaintType.values[data.getUint8(offset)];
+        offset += 1;
+
+        if (paintType == ColorGlyphPaintType.image) {
+          // Image layer deserialization.
+          // Align to 4.
+          offset = (offset + 3) & ~3;
+          final imageWidth = data.getUint32(offset, Endian.host);
+          offset += 4;
+          final imageHeight = data.getUint32(offset, Endian.host);
+          offset += 4;
+          final imageBearingX = data.getFloat32(offset, Endian.host).toDouble();
+          offset += 4;
+          final imageBearingY = data.getFloat32(offset, Endian.host).toDouble();
+          offset += 4;
+          final imageExtentX = data.getFloat32(offset, Endian.host).toDouble();
+          offset += 4;
+          final imageExtentY = data.getFloat32(offset, Endian.host).toDouble();
+          offset += 4;
+          final imageByteLength = data.getUint32(offset, Endian.host);
+          offset += 4;
+          final imageBytes = Uint8List.fromList(
+              buffer.sublist(offset, offset + imageByteLength));
+          offset += imageByteLength;
+          // Skip padding to 4-byte alignment.
+          offset = (offset + 3) & ~3;
+
+          layers.add(ColorGlyphLayer(
+            paintType: paintType,
+            imageBytes: imageBytes,
+            imageWidth: imageWidth,
+            imageHeight: imageHeight,
+            imageBearingX: imageBearingX,
+            imageBearingY: imageBearingY,
+            imageExtentX: imageExtentX,
+            imageExtentY: imageExtentY,
+          ));
+        } else {
+          final useForeground = data.getUint8(offset) != 0;
+          offset += 1;
+
+          final stopCount = data.getUint16(offset, Endian.host);
+          offset += 2;
+
+          final color = data.getUint32(offset, Endian.host);
+          offset += 4;
+
+          final verbCount = data.getUint16(offset, Endian.host);
+          offset += 2;
+
+          final pointCount = data.getUint16(offset, Endian.host);
+          offset += 2;
+
+          // Copy points (float pairs).
+          final points = Float32List(pointCount * 2);
+          for (int p = 0; p < pointCount * 2; p++) {
+            points[p] = data.getFloat32(offset, Endian.host);
+            offset += 4;
+          }
+
+          // Copy verbs.
+          final verbs = Uint8List(verbCount);
+          for (int v = 0; v < verbCount; v++) {
+            verbs[v] = data.getUint8(offset);
+            offset += 1;
+          }
+
+          // Skip padding to 4-byte alignment.
+          offset = (offset + 3) & ~3;
+
+          // Read gradient stops if present.
+          final stops = <GradientStop>[];
+          double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+          double r0 = 0, r1 = 0;
+          double startAngle = 0, endAngle = 0;
+          if (stopCount > 0) {
+            final offsets = Float64List(stopCount);
+            final colors = List<int>.filled(stopCount, 0);
+            for (int s = 0; s < stopCount; s++) {
+              offsets[s] = data.getFloat32(offset, Endian.host);
+              offset += 4;
+            }
+            for (int s = 0; s < stopCount; s++) {
+              colors[s] = data.getUint32(offset, Endian.host);
+              offset += 4;
+            }
+            for (int s = 0; s < stopCount; s++) {
+              stops.add(GradientStop(offsets[s], colors[s]));
+            }
+            x0 = data.getFloat32(offset, Endian.host);
+            offset += 4;
+            y0 = data.getFloat32(offset, Endian.host);
+            offset += 4;
+            x1 = data.getFloat32(offset, Endian.host);
+            offset += 4;
+            y1 = data.getFloat32(offset, Endian.host);
+            offset += 4;
+            r0 = data.getFloat32(offset, Endian.host);
+            offset += 4;
+            r1 = data.getFloat32(offset, Endian.host);
+            offset += 4;
+            startAngle = data.getFloat32(offset, Endian.host);
+            offset += 4;
+            endAngle = data.getFloat32(offset, Endian.host);
+            offset += 4;
+          }
+
+          layers.add(ColorGlyphLayer(
+            path: BufferRawPath(points, verbs),
+            paintType: paintType,
+            color: color,
+            useForeground: useForeground,
+            stops: stops,
+            x0: x0,
+            y0: y0,
+            x1: x1,
+            y1: y1,
+            r0: r0,
+            r1: r1,
+            startAngle: startAngle,
+            endAngle: endAngle,
+          ));
+        }
+      }
+
+      return layers;
+    } finally {
+      deleteColorGlyphBuffer(bufferPtr);
+    }
   }
 
   @override

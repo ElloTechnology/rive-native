@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <vector>
 #include <unordered_map>
+#include "rive/animation/keyboard_listener_group.hpp"
 #include "rive/animation/linear_animation_instance.hpp"
 #include "rive/animation/state_instance.hpp"
 #include "rive/animation/state_transition.hpp"
@@ -13,11 +14,15 @@
 #include "rive/listener_type.hpp"
 #include "rive/nested_animation.hpp"
 #include "rive/scene.hpp"
+#include "rive/data_bind/bindable_property_number.hpp"
 #include "rive/data_bind/data_bind_container.hpp"
 #include "rive/input/focusable.hpp"
+#include "rive/input/focus_manager.hpp"
 
 namespace rive
 {
+class FocusData;
+class FocusListenerGroup;
 class StateMachine;
 class LayerState;
 class SMIInput;
@@ -147,12 +152,6 @@ public:
                         int pointerId = 0);
     HitResult dragEnd(Vec2D position, float timeStamp = 0, int pointerId = 0);
 
-    bool keyInput(Key value,
-                  KeyModifiers modifiers,
-                  bool isPressed,
-                  bool isRepeat);
-    bool textInput(const std::string& text);
-
     bool tryChangeState();
     bool hitTest(Vec2D position) const;
 
@@ -203,10 +202,50 @@ public:
         BindableProperty* bindableProperty) const;
     DataBind* bindableDataBindToTarget(
         BindableProperty* bindableProperty) const;
+
+    /// Find the per-instance BindablePropertyNumber for the given shared
+    /// StateTransition and property key (e.g. durationPropertyKey).
+    /// Returns nullptr if no binding exists.
+    BindablePropertyNumber* findTransitionPropertyInstance(
+        const StateTransition* transition,
+        uint32_t propertyKey) const;
     bool hasListeners() { return m_hitComponents.size() > 0; }
     void clearDataContext();
+    void relinkDataContext() override;
+    void rebuildDataBind(DataBind*) override;
     void internalDataContext(rcp<DataContext> dataContext);
     ScriptedObject* scriptedObject(const ScriptedObject*) const;
+
+    /// Queue a focus event for deferred execution during advance().
+    void queueFocusEvent(FocusListenerGroup* group, bool isFocus);
+
+    /// Get the focus manager for this state machine instance.
+    /// Returns the external focus manager if set, otherwise the internal one.
+    FocusManager* focusManager()
+    {
+        return m_externalFocusManager ? m_externalFocusManager
+                                      : &m_focusManager;
+    }
+
+    /// Check if this state machine is using an external focus manager.
+    bool hasExternalFocusManager() const
+    {
+        return m_externalFocusManager != nullptr;
+    }
+
+    /// Get the internal focus manager (always owned by this
+    /// StateMachineInstance). Useful when you need to operate only on the
+    /// internal manager regardless of whether an external one is set.
+    FocusManager* internalFocusManager() { return &m_focusManager; }
+
+    /// Set an external focus manager to use instead of the internal one.
+    /// This is used when a nested artboard should share focus with its parent.
+    /// If the focus tree was already built with a different manager, it will
+    /// be rebuilt with the new manager.
+    void setExternalFocusManager(FocusManager* manager);
+
+    /// Set focus to a specific FocusData's node.
+    void setFocus(FocusData* focusData);
 #ifdef TESTING
     size_t hitComponentsCount() { return m_hitComponents.size(); };
     HitComponent* hitComponent(size_t index)
@@ -221,6 +260,7 @@ public:
 #endif
     void enablePointerEvents(int pointerId = 0);
     void disablePointerEvents(int pointerId = 0);
+    void dispose();
 
 private:
     std::vector<EventReport> m_reportedEvents;
@@ -246,10 +286,32 @@ private:
         m_bindableDataBindsToTarget;
     std::unordered_map<BindableProperty*, DataBind*>
         m_bindableDataBindsToSource;
+    /// Map from shared StateTransition* to per-instance BindablePropertyNumber
+    /// instances, keyed by original property key. Data binds write to these
+    /// instead of the shared StateTransition object.
+    std::unordered_map<const Core*,
+                       std::unordered_map<uint32_t, BindablePropertyNumber*>>
+        m_transitionPropertyInstances;
     uint8_t m_drawOrderChangeCounter = 0;
     void unbind();
     void removeEventListeners();
     void initScriptedObjects();
+
+    // Focus management
+    FocusManager m_focusManager;
+    FocusManager* m_externalFocusManager = nullptr;
+    std::vector<std::unique_ptr<FocusListenerGroup>> m_focusListenerGroups;
+    std::vector<std::unique_ptr<KeyboardListenerGroup>>
+        m_keyboardListenerGroups;
+
+    // Queued focus events for deferred processing
+    struct QueuedFocusEvent
+    {
+        FocusListenerGroup* group;
+        bool isFocus;
+    };
+    std::vector<QueuedFocusEvent> m_queuedFocusEvents;
+    void processFocusEvents();
 
 #ifdef WITH_RIVE_TOOLS
 public:

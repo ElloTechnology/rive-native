@@ -121,5 +121,74 @@ void main() {
         ..tick();
       await golden.run();
     });
+
+    testWidgets('Data binding artboards with custom VMI',
+        (WidgetTester tester) async {
+      final file = File('test/assets/artboard_db_vmi_test.riv');
+      final bytes = file.readAsBytesSync();
+      final riveFile =
+          await rive.File.decode(bytes, riveFactory: rive.Factory.flutter);
+      expect(riveFile, isNotNull);
+
+      // Create two custom ControlledViewModel instances with different
+      // text and color values, mirroring the Unity golden test.
+      final controlledViewModel =
+          riveFile!.viewModelByName('ControlledViewModel');
+      expect(controlledViewModel, isNotNull);
+
+      final controlledInstance1 = controlledViewModel!.createInstance();
+      expect(controlledInstance1, isNotNull);
+      controlledInstance1!.string('text')!.value = 'Custom 1';
+      controlledInstance1.color('color')!.value = const Color(0xFFFF0000);
+
+      final controlledInstance2 = controlledViewModel.createInstance();
+      expect(controlledInstance2, isNotNull);
+      controlledInstance2!.string('text')!.value = 'Custom 2';
+      controlledInstance2.color('color')!.value = const Color(0xFF0000FF);
+
+      // Create bindable artboards: default, with instance 1, with instance 2
+      final controlledDefault = riveFile.artboardToBind('ArtboardControlled');
+      final controlledWithVmi1 = riveFile.artboardToBind(
+        'ArtboardControlled',
+        viewModelInstance: controlledInstance1,
+      );
+      final controlledWithVmi2 = riveFile.artboardToBind(
+        'ArtboardControlled',
+        viewModelInstance: controlledInstance2,
+      );
+
+      expect(controlledDefault, isNotNull);
+      expect(controlledWithVmi1, isNotNull);
+      expect(controlledWithVmi2, isNotNull);
+
+      final golden = RiveGolden(
+        name: 'databinding_artboards_vmi',
+        filePath: 'assets/artboard_db_vmi_test.riv',
+        autoBind: true,
+        widgetTester: tester,
+      )
+        // Case 1: Default instance (no custom VMI)
+        ..setArtboard('artboard_1', controlledDefault!)
+        ..tick()
+        ..golden()
+        // Case 2: Custom instance 1 (red, "Custom 1")
+        ..setArtboard('artboard_1', controlledWithVmi1!)
+        ..tick()
+        ..golden()
+        // Case 3: Custom instance 2 (blue, "Custom 2")
+        ..setArtboard('artboard_1', controlledWithVmi2!)
+        ..tick()
+        ..golden()
+        ..tick();
+      await golden.run();
+
+      controlledInstance1.dispose();
+      controlledInstance2.dispose();
+      controlledDefault.dispose();
+      controlledWithVmi1.dispose();
+      controlledWithVmi2.dispose();
+      controlledViewModel.dispose();
+      riveFile.dispose();
+    });
   });
 }

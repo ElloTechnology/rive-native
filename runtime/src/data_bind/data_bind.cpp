@@ -12,6 +12,7 @@
 #include "rive/data_bind/bindable_property_boolean.hpp"
 #include "rive/data_bind/bindable_property_trigger.hpp"
 #include "rive/data_bind/bindable_property_integer.hpp"
+#include "rive/data_bind/bindable_property_viewmodel.hpp"
 #include "rive/data_bind/data_bind_container.hpp"
 #include "rive/data_bind/context/context_value.hpp"
 #include "rive/data_bind/context/context_value_any.hpp"
@@ -25,6 +26,7 @@
 #include "rive/data_bind/context/context_value_color.hpp"
 #include "rive/data_bind/context/context_value_trigger.hpp"
 #include "rive/data_bind/context/context_value_symbol_list_index.hpp"
+#include "rive/data_bind/context/context_value_viewmodel.hpp"
 #include "rive/data_bind/data_values/data_type.hpp"
 #include "rive/data_bind/converters/data_converter.hpp"
 #include "rive/data_bind/converters/formula/formula_token.hpp"
@@ -34,6 +36,7 @@
 #include "rive/importers/artboard_importer.hpp"
 #include "rive/importers/state_machine_importer.hpp"
 #include "rive/importers/backboard_importer.hpp"
+#include "rive/component.hpp"
 
 using namespace rive;
 
@@ -101,6 +104,7 @@ StatusCode DataBind::import(ImportStack& importStack)
                 case BindablePropertyTriggerBase::typeKey:
                 case BindablePropertyIntegerBase::typeKey:
                 case BindablePropertyAssetBase::typeKey:
+                case BindablePropertyViewModelBase::typeKey:
                 case BindablePropertyListBase::typeKey:
                 case TransitionPropertyViewModelComparatorBase::typeKey:
                 case StateTransitionBase::typeKey:
@@ -118,6 +122,21 @@ StatusCode DataBind::import(ImportStack& importStack)
                 }
                 default:
                 {
+                    // Prefer the artboard that actually owns the target object.
+                    // Relying on latest<ArtboardImporter> can attach binds to
+                    // the wrong source artboard when multiple artboards are
+                    // loaded.
+                    if (target()->is<Component>())
+                    {
+                        auto comp = target()->as<Component>();
+                        auto parentArtboard = comp->artboard();
+                        if (parentArtboard != nullptr)
+                        {
+                            parentArtboard->addDataBind(this);
+                            return Super::import(importStack);
+                        }
+                    }
+
                     auto artboardImporter =
                         importStack.latest<ArtboardImporter>(
                             ArtboardBase::typeKey);
@@ -171,17 +190,18 @@ DataType DataBind::sourceOutputType()
                 return DataType::assetImage;
             case ViewModelInstanceArtboardBase::typeKey:
                 return DataType::artboard;
+            case ViewModelInstanceViewModelBase::typeKey:
+                return DataType::viewModel;
         }
     }
     return DataType::none;
 }
 
-void DataBind::source(ViewModelInstanceValue* value)
+void DataBind::source(rcp<ViewModelInstanceValue> value)
 {
     if (!bindsOnce())
     {
         value->addDependent(this);
-        value->ref();
     }
     m_Source = value;
 
@@ -204,7 +224,6 @@ void DataBind::clearSource()
         if (!bindsOnce())
         {
             m_Source->removeDependent(this);
-            m_Source->unref();
         }
         m_Source = nullptr;
     }
@@ -254,6 +273,9 @@ void DataBind::bind()
             break;
         case DataType::artboard:
             m_ContextValue = new DataBindContextValueArtboard(this);
+            break;
+        case DataType::viewModel:
+            m_ContextValue = new DataBindContextValueViewModel(this);
             break;
         case DataType::any:
             m_ContextValue = new DataBindContextValueAny(this);
@@ -377,6 +399,8 @@ void DataBind::container(DataBindContainer* container)
 {
     m_container = container;
 }
+
+void DataBind::relinkDataBind() { m_container->rebuildDataBind(this); }
 
 bool DataBind::bindsOnce()
 {

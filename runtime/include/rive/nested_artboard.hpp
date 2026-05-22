@@ -8,6 +8,7 @@
 #include "rive/data_bind/data_context.hpp"
 #include "rive/viewmodel/viewmodel_instance_value.hpp"
 #include "rive/hit_info.hpp"
+#include "rive/input/focusable.hpp"
 #include "rive/span.hpp"
 #include "rive/advancing_component.hpp"
 #include "rive/resetting_component.hpp"
@@ -28,7 +29,8 @@ class NestedArtboard : public NestedArtboardBase,
                        public AdvancingComponent,
                        public ResettingComponent,
                        public ArtboardHost,
-                       public ArtboardReferencer
+                       public ArtboardReferencer,
+                       public Focusable
 {
 protected:
     std::unique_ptr<ArtboardInstance> m_Instance; // may be null
@@ -38,7 +40,7 @@ protected:
     File* m_file = nullptr;
     rcp<ViewModelInstance> m_viewModelInstance = nullptr;
     rcp<DataContext> m_dataContext = nullptr;
-    // Auto-created ViewModelInstance for stateful artboards.
+    // ViewModelInstance child for stateful artboards.
     rcp<ViewModelInstance> m_statefulViewModelInstance = nullptr;
 
 protected:
@@ -96,6 +98,7 @@ public:
     void bindViewModelInstance(rcp<ViewModelInstance> viewModelInstance,
                                rcp<DataContext> parent) override;
     void internalDataContext(rcp<DataContext> dataContext) override;
+    void relinkDataContext(rcp<ViewModelInstance> viewModelInstance) override;
     void clearDataContext() override;
     void unbind() override;
     void updateDataBinds() override;
@@ -107,12 +110,21 @@ public:
     void reset() override;
     Artboard* parentArtboard() override { return artboard(); }
     Vec2D hostTransformPoint(const Vec2D&, ArtboardInstance*) override;
+    Mat2D worldTransformForArtboard(ArtboardInstance*) override;
     bool hitTestHost(const Vec2D& position,
                      bool skipOnUnclipped,
                      ArtboardInstance* artboard) override;
     void markHostTransformDirty() override { markTransformDirty(); }
     void file(File*) override;
     File* file() const override;
+    Component* hostComponent() override { return this; }
+
+    // Focusable interface - delegates to nested state machines
+    bool keyInput(Key, KeyModifiers, bool, bool) override { return false; };
+    bool textInput(const std::string&) override { return false; };
+    void focused() override {}
+    void blurred() override {}
+    Artboard* focusableArtboard() const override { return artboard(); }
 };
 } // namespace rive
 

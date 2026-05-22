@@ -1,5 +1,152 @@
-#ifdef __EMSCRIPTEN__
+// Common includes needed by shared helpers in both WASM and FFI paths.
 #include "rive/text/font_hb.hpp"
+#include <stdint.h>
+#include <string.h>
+#include <vector>
+
+// ── Shared color layer serialization ─────────────────────────────────────
+static size_t colorLayerBufferSize(
+    const std::vector<rive::Font::ColorGlyphLayer>& layers)
+{
+    size_t totalSize = sizeof(uint32_t); // layerCount
+    for (const auto& layer : layers)
+    {
+        if (layer.paintType == rive::Font::ColorGlyphPaintType::image)
+        {
+            // Image layer: paintType + 3-byte alignment + imageWidth +
+            // imageHeight +
+            //   4 floats (bearingX/Y, extentX/Y) + imageByteLength + bytes
+            // The 3-byte alignment accounts for the padding
+            // writeColorLayerBuffer inserts after the 1-byte paintType to align
+            // the next field to 4 bytes.
+            size_t layerSize = sizeof(uint8_t) + // paintType
+                               3 + // alignment padding after paintType
+                               sizeof(uint32_t) +       // imageWidth
+                               sizeof(uint32_t) +       // imageHeight
+                               4 * sizeof(float) +      // bearing/extent
+                               sizeof(uint32_t) +       // imageByteLength
+                               layer.imageBytes.size(); // image data
+            layerSize = (layerSize + 3) & ~3;           // pad to 4
+            totalSize += layerSize;
+        }
+        else
+        {
+            size_t verbCount = layer.path.verbs().size();
+            size_t pointCount = layer.path.points().size();
+            size_t layerSize = sizeof(uint8_t) +                // paintType
+                               sizeof(uint8_t) +                // useForeground
+                               sizeof(uint16_t) +               // stopCount
+                               sizeof(uint32_t) +               // color
+                               sizeof(uint16_t) +               // verbCount
+                               sizeof(uint16_t) +               // pointCount
+                               pointCount * 2 * sizeof(float) + // points
+                               verbCount;                       // verbs
+            layerSize = (layerSize + 3) & ~3;                   // pad to 4
+            if (!layer.stops.empty())
+            {
+                layerSize += layer.stops.size() * sizeof(float);    // offsets
+                layerSize += layer.stops.size() * sizeof(uint32_t); // colors
+                layerSize += 8 * sizeof(float); // gradientParams
+            }
+            totalSize += layerSize;
+        }
+    }
+    return totalSize;
+}
+
+static uint8_t* writeColorLayerBuffer(
+    const std::vector<rive::Font::ColorGlyphLayer>& layers,
+    uint8_t* ptr)
+{
+    *reinterpret_cast<uint32_t*>(ptr) = (uint32_t)layers.size();
+    ptr += sizeof(uint32_t);
+
+    for (const auto& layer : layers)
+    {
+        *ptr++ = (uint8_t)layer.paintType;
+
+        if (layer.paintType == rive::Font::ColorGlyphPaintType::image)
+        {
+            // Image layer serialization.
+            while ((uintptr_t)ptr & 3)
+                *ptr++ = 0; // align to 4
+            *reinterpret_cast<uint32_t*>(ptr) = layer.imageWidth;
+            ptr += sizeof(uint32_t);
+            *reinterpret_cast<uint32_t*>(ptr) = layer.imageHeight;
+            ptr += sizeof(uint32_t);
+            *reinterpret_cast<float*>(ptr) = layer.imageBearingX;
+            ptr += sizeof(float);
+            *reinterpret_cast<float*>(ptr) = layer.imageBearingY;
+            ptr += sizeof(float);
+            *reinterpret_cast<float*>(ptr) = layer.imageExtentX;
+            ptr += sizeof(float);
+            *reinterpret_cast<float*>(ptr) = layer.imageExtentY;
+            ptr += sizeof(float);
+            *reinterpret_cast<uint32_t*>(ptr) =
+                (uint32_t)layer.imageBytes.size();
+            ptr += sizeof(uint32_t);
+            memcpy(ptr, layer.imageBytes.data(), layer.imageBytes.size());
+            ptr += layer.imageBytes.size();
+            while ((uintptr_t)ptr & 3)
+                *ptr++ = 0; // pad to 4
+        }
+        else
+        {
+            auto verbs = layer.path.verbs();
+            auto points = layer.path.points();
+
+            *ptr++ = layer.useForeground ? 1 : 0;
+            *reinterpret_cast<uint16_t*>(ptr) = (uint16_t)layer.stops.size();
+            ptr += sizeof(uint16_t);
+
+            *reinterpret_cast<uint32_t*>(ptr) = layer.color;
+            ptr += sizeof(uint32_t);
+
+            *reinterpret_cast<uint16_t*>(ptr) = (uint16_t)verbs.size();
+            ptr += sizeof(uint16_t);
+            *reinterpret_cast<uint16_t*>(ptr) = (uint16_t)points.size();
+            ptr += sizeof(uint16_t);
+
+            size_t pointsBytes = points.size() * sizeof(rive::Vec2D);
+            memcpy(ptr, points.data(), pointsBytes);
+            ptr += pointsBytes;
+
+            memcpy(ptr, verbs.data(), verbs.size());
+            ptr += verbs.size();
+
+            while ((uintptr_t)ptr & 3)
+                *ptr++ = 0; // pad to 4
+
+            if (!layer.stops.empty())
+            {
+                for (const auto& stop : layer.stops)
+                {
+                    *reinterpret_cast<float*>(ptr) = stop.offset;
+                    ptr += sizeof(float);
+                }
+                for (const auto& stop : layer.stops)
+                {
+                    *reinterpret_cast<uint32_t*>(ptr) = stop.color;
+                    ptr += sizeof(uint32_t);
+                }
+                float params[8] = {layer.x0,
+                                   layer.y0,
+                                   layer.x1,
+                                   layer.y1,
+                                   layer.r0,
+                                   layer.r1,
+                                   layer.startAngle,
+                                   layer.endAngle};
+                memcpy(ptr, params, sizeof(params));
+                ptr += sizeof(params);
+            }
+        }
+    }
+    return ptr;
+}
+// ─────────────────────────────────────────────────────────────────────────
+
+#ifdef __EMSCRIPTEN__
 
 #include <emscripten.h>
 #include <emscripten/bind.h>
@@ -316,6 +463,86 @@ void init()
     rive::Font::gFallbackProc = pickFallbackFont;
 }
 
+// Color glyph (emoji) support - WASM versions.
+
+bool wasmFontHasColorGlyphs(WasmPtr fontPtr)
+{
+    auto font = reinterpret_cast<HBFont*>(fontPtr);
+    if (font == nullptr)
+    {
+        return false;
+    }
+    return font->hasColorGlyphs();
+}
+
+bool wasmFontIsColorGlyph(WasmPtr fontPtr, rive::GlyphID glyphId)
+{
+    auto font = reinterpret_cast<HBFont*>(fontPtr);
+    if (font == nullptr)
+    {
+        return false;
+    }
+    return font->isColorGlyph(glyphId);
+}
+
+// Returns a serialized binary buffer with all color glyph layers.
+// Format:
+//   uint32 layerCount
+//   per layer:
+//     uint8  paintType (0=solid, 1=linear, 2=radial, 3=sweep)
+//     uint8  useForeground
+//     uint16 stopCount
+//     uint32 color
+//     uint16 verbCount
+//     uint16 pointCount
+//     float[pointCount*2] points (x,y pairs)
+//     uint8[verbCount] verbs
+//     (padding to 4-byte alignment)
+//     if stopCount > 0:
+//       float[stopCount] offsets
+//       uint32[stopCount] colors
+//       float[8] gradientParams (x0,y0,x1,y1,r0,r1,startAngle,endAngle)
+// Returns a WasmPtr to the buffer and writes the size to *outSize.
+// Caller frees with wasmDeleteColorGlyphBuffer.
+WasmPtr wasmGetColorGlyphLayers(WasmPtr fontPtr,
+                                rive::GlyphID glyphId,
+                                uint32_t foregroundColor,
+                                WasmPtr outSizePtr)
+{
+    auto* outSize = reinterpret_cast<uint32_t*>(outSizePtr);
+    auto font = reinterpret_cast<HBFont*>(fontPtr);
+    if (font == nullptr || outSize == nullptr)
+    {
+        if (outSize)
+            *outSize = 0;
+        return 0;
+    }
+    std::vector<rive::Font::ColorGlyphLayer> layers;
+    size_t count =
+        font->getColorLayers(glyphId, layers, (rive::ColorInt)foregroundColor);
+    if (count == 0)
+    {
+        *outSize = 0;
+        return 0;
+    }
+
+    size_t totalSize = colorLayerBufferSize(layers);
+    auto* buffer = new uint8_t[totalSize];
+    uint8_t* end = writeColorLayerBuffer(layers, buffer);
+
+    *outSize = (uint32_t)(end - buffer);
+    return (WasmPtr)buffer;
+}
+
+void wasmDeleteColorGlyphBuffer(WasmPtr ptr)
+{
+    if (ptr == 0)
+    {
+        return;
+    }
+    delete[] reinterpret_cast<uint8_t*>(ptr);
+}
+
 #ifdef DEBUG
 // clang-format off
 #define OFFSET_OF(type, member) ((int)(intptr_t)&(((type*)(void*)0)->member))
@@ -400,6 +627,11 @@ EMSCRIPTEN_BINDINGS(RiveText)
     function("breakLines", &breakLines);
     function("deleteLines", &deleteLines);
     function("init", &init);
+
+    function("fontHasColorGlyphs", &wasmFontHasColorGlyphs);
+    function("fontIsColorGlyph", &wasmFontIsColorGlyph);
+    function("getColorGlyphLayers", &wasmGetColorGlyphLayers);
+    function("deleteColorGlyphBuffer", &wasmDeleteColorGlyphBuffer);
 
 #ifdef DEBUG
     function("assertSomeAssumptions", &assertSomeAssumptions);
@@ -665,6 +897,61 @@ EXPORT void deleteFontFeatures(rive::SimpleArray<uint32_t>* features)
 {
     delete features;
 }
+
+// Color glyph (emoji) support.
+
+EXPORT bool fontHasColorGlyphs(rive::Font* font)
+{
+    if (font == nullptr)
+    {
+        return false;
+    }
+    return font->hasColorGlyphs();
+}
+
+EXPORT bool fontIsColorGlyph(rive::Font* font, rive::GlyphID glyphId)
+{
+    if (font == nullptr)
+    {
+        return false;
+    }
+    return font->isColorGlyph(glyphId);
+}
+
+// Serializes all color glyph layers into a flat binary buffer.
+// Uses the shared colorLayerBufferSize/writeColorLayerBuffer format.
+// Returns the buffer pointer and writes the size to *outSize.
+// Caller frees with deleteColorGlyphBuffer.
+EXPORT uint8_t* fontGetColorGlyphLayers(rive::Font* font,
+                                        rive::GlyphID glyphId,
+                                        uint32_t foregroundColor,
+                                        uint32_t* outSize)
+{
+    if (font == nullptr || outSize == nullptr)
+    {
+        if (outSize)
+            *outSize = 0;
+        return nullptr;
+    }
+
+    std::vector<rive::Font::ColorGlyphLayer> layers;
+    size_t count =
+        font->getColorLayers(glyphId, layers, (rive::ColorInt)foregroundColor);
+    if (count == 0)
+    {
+        *outSize = 0;
+        return nullptr;
+    }
+
+    size_t totalSize = colorLayerBufferSize(layers);
+    auto* buffer = new uint8_t[totalSize];
+    uint8_t* end = writeColorLayerBuffer(layers, buffer);
+
+    *outSize = (uint32_t)(end - buffer);
+    return buffer;
+}
+
+EXPORT void deleteColorGlyphBuffer(uint8_t* buffer) { delete[] buffer; }
 
 EXPORT void disableFallbackFonts() { rive::Font::gFallbackProcEnabled = false; }
 

@@ -479,6 +479,73 @@ class FontFeature {
 
 enum FontInitStatus { success, failed, alreadyInitialized }
 
+/// Paint type for a color glyph layer.
+enum ColorGlyphPaintType {
+  solid,
+  linearGradient,
+  radialGradient,
+  sweepGradient,
+  image
+}
+
+/// A gradient color stop (offset + ARGB color).
+class GradientStop {
+  final double offset;
+  final int color; // ARGB
+
+  GradientStop(this.offset, this.color);
+}
+
+/// A single layer of a color glyph (emoji), with its own path and paint.
+class ColorGlyphLayer {
+  final RawPath? path;
+  final ColorGlyphPaintType paintType;
+  final int color; // ARGB (used for solid fills)
+  final bool useForeground;
+
+  /// Gradient stops (empty for solid fills).
+  final List<GradientStop> stops;
+
+  /// Gradient geometry parameters.
+  final double x0, y0, x1, y1;
+  final double r0, r1;
+  final double startAngle, endAngle;
+
+  /// Image data (only valid when paintType == image).
+  final Uint8List? imageBytes;
+  final int imageWidth;
+  final int imageHeight;
+  final double imageBearingX, imageBearingY;
+  final double imageExtentX, imageExtentY;
+
+  ColorGlyphLayer({
+    this.path,
+    this.paintType = ColorGlyphPaintType.solid,
+    this.color = 0xFF000000,
+    this.useForeground = false,
+    this.stops = const [],
+    this.x0 = 0,
+    this.y0 = 0,
+    this.x1 = 0,
+    this.y1 = 0,
+    this.r0 = 0,
+    this.r1 = 0,
+    this.startAngle = 0,
+    this.endAngle = 0,
+    this.imageBytes,
+    this.imageWidth = 0,
+    this.imageHeight = 0,
+    this.imageBearingX = 0,
+    this.imageBearingY = 0,
+    this.imageExtentX = 0,
+    this.imageExtentY = 0,
+  });
+
+  void dispose() {
+    path?.dispose();
+  }
+}
+
 abstract class Font {
   // Variable axes available to the font.
   Iterable<FontAxis> get axes;
@@ -546,6 +613,18 @@ abstract class Font {
   }
 
   RawPath extractGlyphPath(int glyphId);
+
+  /// Whether this font contains any COLR color glyphs (emoji).
+  bool get hasColorGlyphs => false;
+
+  /// Whether a specific glyph has color layers.
+  bool isColorGlyph(int glyphId) => false;
+
+  /// Get the colored layers for a color glyph.
+  /// Returns an empty list for non-color glyphs.
+  List<ColorGlyphLayer> getColorLayers(int glyphId,
+          {int foregroundColor = 0xFF000000}) =>
+      const [];
 
   @mustCallSuper
   void dispose() {

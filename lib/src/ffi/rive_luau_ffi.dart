@@ -479,6 +479,99 @@ final Pointer<Void> Function(Pointer<Void> state, int id, double x, double y)
                     Float)>>('riveLuaPushPointerEvent')
         .asFunction();
 
+final Pointer<Void> Function(Pointer<Void> state, int id, double x, double y,
+        double prevX, double prevY, int hitType, double timeStamp)
+    _riveLuaPushPointerListenerInvocation = _nativeLib
+        .lookup<
+            NativeFunction<
+                Pointer<Void> Function(
+                    Pointer<Void>,
+                    Uint8,
+                    Float,
+                    Float,
+                    Float,
+                    Float,
+                    Int32,
+                    Float)>>('riveLuaPushPointerListenerInvocation')
+        .asFunction();
+
+final Pointer<Void> Function(Pointer<Void> state, int key, int modifiers,
+        int isPressed, int isRepeat) _riveLuaPushKeyboardListenerInvocation =
+    _nativeLib
+        .lookup<
+            NativeFunction<
+                Pointer<Void> Function(Pointer<Void>, Uint32, Uint8, Uint8,
+                    Uint8)>>('riveLuaPushKeyboardListenerInvocation')
+        .asFunction();
+
+final Pointer<Void> Function(Pointer<Void> state, int key, int modifiers,
+        int isPressed, int isRepeat) _riveLuaPushScriptedKeyboardInvocation =
+    _nativeLib
+        .lookup<
+            NativeFunction<
+                Pointer<Void> Function(Pointer<Void>, Uint32, Uint8, Uint8,
+                    Uint8)>>('riveLuaPushScriptedKeyboardInvocation')
+        .asFunction();
+
+final Pointer<Void> Function(Pointer<Void> state, Pointer<Utf8> text)
+    _riveLuaPushTextInputListenerInvocation = _nativeLib
+        .lookup<
+            NativeFunction<
+                Pointer<Void> Function(
+                    Pointer<Void>, Pointer<Utf8>)>>(
+          'riveLuaPushTextInputListenerInvocation',
+        )
+        .asFunction();
+
+final Pointer<Void> Function(Pointer<Void> state, Pointer<Utf8> text)
+    _riveLuaPushScriptedTextInputInvocation = _nativeLib
+        .lookup<
+            NativeFunction<
+                Pointer<Void> Function(
+                    Pointer<Void>, Pointer<Utf8>)>>(
+          'riveLuaPushScriptedTextInputInvocation',
+        )
+        .asFunction();
+
+final Pointer<Void> Function(Pointer<Void> state, int isFocus)
+    _riveLuaPushFocusListenerInvocation = _nativeLib
+        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>, Uint8)>>(
+          'riveLuaPushFocusListenerInvocation',
+        )
+        .asFunction();
+
+final Pointer<Void> Function(Pointer<Void> state, double delaySeconds)
+    _riveLuaPushReportedEventListenerInvocation = _nativeLib
+        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>, Float)>>(
+          'riveLuaPushReportedEventListenerInvocation',
+        )
+        .asFunction();
+
+final Pointer<Void> Function(Pointer<Void> state)
+    _riveLuaPushViewModelChangeListenerInvocation = _nativeLib
+        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>)>>(
+          'riveLuaPushViewModelChangeListenerInvocation',
+        )
+        .asFunction();
+
+final Pointer<Void> Function(Pointer<Void> state)
+    _riveLuaPushNoneListenerInvocation = _nativeLib
+        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>)>>(
+          'riveLuaPushNoneListenerInvocation',
+        )
+        .asFunction();
+
+final Pointer<Void> Function(
+        Pointer<Void> state, int deviceId, int buttonMask, double axis0)
+    _riveLuaPushGamepadListenerInvocation = _nativeLib
+        .lookup<
+            NativeFunction<
+                Pointer<Void> Function(
+                    Pointer<Void>, Int32, Uint64, Float)>>(
+          'riveLuaPushGamepadListenerInvocation',
+        )
+        .asFunction();
+
 final int Function(Pointer<Void> state) _riveLuaPointerEventHitResult =
     _nativeLib
         .lookup<NativeFunction<Uint8 Function(Pointer<Void>)>>(
@@ -1033,6 +1126,86 @@ class LuauStateFFI extends LuauState implements RiveFFIReference {
   PointerEvent pushPointerEvent(int id, Vec2D position) => FFIPointerEvent(
         _riveLuaPushPointerEvent(_statePtr, id, position.x, position.y),
       );
+
+  @override
+  void pushPointerListenerInvocation(int id, Vec2D position,
+      Vec2D previousPosition, int listenerType, double timeStamp) {
+    _riveLuaPushPointerListenerInvocation(
+      _statePtr,
+      id,
+      position.x,
+      position.y,
+      previousPosition.x,
+      previousPosition.y,
+      listenerType,
+      timeStamp,
+    );
+  }
+
+  @override
+  void pushKeyboardListenerInvocation(int key, int modifiers, bool isPressed,
+      bool isRepeat) {
+    _riveLuaPushKeyboardListenerInvocation(
+      _statePtr,
+      key,
+      modifiers,
+      isPressed ? 1 : 0,
+      isRepeat ? 1 : 0,
+    );
+  }
+
+  @override
+  void pushScriptedKeyboardInvocation(int key, int modifiers, bool isPressed,
+      bool isRepeat) {
+    _riveLuaPushScriptedKeyboardInvocation(
+      _statePtr,
+      key,
+      modifiers,
+      isPressed ? 1 : 0,
+      isRepeat ? 1 : 0,
+    );
+  }
+
+  @override
+  void pushTextInputListenerInvocation(String text) {
+    _riveLuaPushTextInputListenerInvocation(_statePtr, toNativeString(text));
+  }
+
+  @override
+  void pushScriptedTextInputInvocation(String text) {
+    _riveLuaPushScriptedTextInputInvocation(_statePtr, toNativeString(text));
+  }
+
+  @override
+  void pushFocusListenerInvocation(bool isFocus) {
+    _riveLuaPushFocusListenerInvocation(_statePtr, isFocus ? 1 : 0);
+  }
+
+  @override
+  void pushReportedEventListenerInvocation(double delaySeconds) {
+    _riveLuaPushReportedEventListenerInvocation(_statePtr, delaySeconds);
+  }
+
+  @override
+  void pushViewModelChangeListenerInvocation() {
+    _riveLuaPushViewModelChangeListenerInvocation(_statePtr);
+  }
+
+  @override
+  void pushNoneListenerInvocation() {
+    _riveLuaPushNoneListenerInvocation(_statePtr);
+  }
+
+  @override
+  void pushGamepadListenerInvocation(
+      int deviceId, int buttonMask, double axis0) {
+    _riveLuaPushGamepadListenerInvocation(
+      _statePtr,
+      deviceId,
+      buttonMask,
+      axis0,
+    );
+  }
 
   @override
   void createTable({int arraySize = 0, int recordCount = 0}) =>

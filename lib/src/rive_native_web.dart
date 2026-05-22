@@ -14,6 +14,7 @@ import 'package:rive_native/rive_native.dart';
 import 'package:rive_native/src/wasm_version.dart';
 import 'package:rive_native/src/web/layout_engine_web.dart';
 import 'package:rive_native/src/web/rive_audio_web.dart';
+import 'package:rive_native/src/web/rive_focus_web.dart';
 import 'package:rive_native/src/web/rive_luau_web.dart';
 import 'package:rive_native/src/web/rive_renderer_web.dart';
 import 'package:rive_native/src/web/rive_text_web.dart';
@@ -460,6 +461,7 @@ class RiveWasm {
   static late js.JSFunction artboardDrawInternal;
   static late js.JSFunction artboardReset;
   static late js.JSFunction artboardName;
+  static late js.JSFunction artboardGetInnerPointer;
   static late js.JSFunction deleteArtboardInstance;
   static late js.JSFunction deleteBindableArtboard;
   static late js.JSFunction artboardAnimationCount;
@@ -534,8 +536,6 @@ class RiveWasm {
   static late js.JSFunction stateMachineInstanceDragEnd;
   static late js.JSFunction stateMachineGetReportedEventCount;
   static late js.JSFunction stateMachineReportedEventAt;
-  static late js.JSFunction stateMachineInstanceKeyInput;
-  static late js.JSFunction stateMachineInstanceTextInput;
   static late js.JSFunction deleteEvent;
   static late js.JSFunction deleteCustomProperty;
   static late js.JSFunction getEventName;
@@ -575,6 +575,9 @@ class RiveWasm {
   static late js.JSFunction artboardHeightIntrinsicallySizeOverride;
   static late js.JSFunction updateLayoutBounds;
   static late js.JSFunction cascadeLayoutStyle;
+  static late js.JSFunction cascadeLayoutStyleBatch;
+  static late js.JSFunction? cascadeCollapseBatch;
+  static late js.JSFunction? cascadeCollapse;
 
   static late js.JSFunction makeFlutterRenderImage;
   static late js.JSFunction flutterRenderImageId;
@@ -597,6 +600,7 @@ class RiveWasm {
   static late js.JSFunction setViewModelInstanceAdvanced;
   static late js.JSFunction setViewModelInstanceEnumValue;
   static late js.JSFunction setViewModelInstanceSymbolListIndexValue;
+  static late js.JSFunction setViewModelInstanceListValue;
   static late js.JSFunction copyViewModelInstance;
   static late js.JSFunction riveDataBindDirt;
   static late js.JSFunction riveDataBindSetDirt;
@@ -622,7 +626,18 @@ class RiveWasm {
   static late js.JSFunction setViewModelInstanceAssetCallback;
   static late js.JSFunction setViewModelInstanceArtboardCallback;
   static late js.JSFunction setViewModelInstanceListCallback;
+  static late js.JSFunction setViewModelInstanceViewModelValue;
+  static late js.JSFunction setViewModelInstanceViewModelCallback;
   static late js.JSFunction initBindingCallbacks;
+
+  // Focus-related artboard/state machine functions
+  // These require WITH_RIVE_TOOLS (editor builds only)
+  static js.JSFunction? artboardRootFocusDataCount;
+  static js.JSFunction? artboardRootFocusNodeAt;
+  static js.JSFunction? artboardSetExternalParentFocusNode;
+  static late js.JSFunction artboardBuildFocusTreeWithParent;
+  static late js.JSFunction stateMachineGetFocusManager;
+  static late js.JSFunction stateMachineSetExternalFocusManager;
 
   static late js.JSFunction makeRawText;
   static late js.JSFunction deleteRawText;
@@ -691,14 +706,15 @@ class RiveWasm {
   static late js.JSFunction riveAdvanceFrameId;
 
   // Profiler bindings
-  static late js.JSFunction profilerStart;
-  static late js.JSFunction profilerStop;
-  static late js.JSFunction profilerIsActive;
-  static late js.JSFunction profilerDump;
-  static late js.JSFunction profilerGetBufferPtr;
-  static late js.JSFunction profilerGetBufferSize;
-  static late js.JSFunction profilerFreeBuffer;
-  static late js.JSFunction profilerEndFrame;
+  // Profiler functions require WITH_RIVE_TOOLS (editor builds only)
+  static js.JSFunction? profilerStart;
+  static js.JSFunction? profilerStop;
+  static js.JSFunction? profilerIsActive;
+  static js.JSFunction? profilerDump;
+  static js.JSFunction? profilerGetBufferPtr;
+  static js.JSFunction? profilerGetBufferSize;
+  static js.JSFunction? profilerFreeBuffer;
+  static js.JSFunction? profilerEndFrame;
 
   static ByteData heapView() => heapDataView(0);
 
@@ -931,6 +947,8 @@ class RiveWasm {
     artboardDrawInternal = module['_artboardDrawInternal'] as js.JSFunction;
     artboardReset = module['_artboardReset'] as js.JSFunction;
     artboardName = module['_artboardName'] as js.JSFunction;
+    artboardGetInnerPointer =
+        module['_artboardGetInnerPointer'] as js.JSFunction;
     deleteArtboardInstance = module['_deleteArtboardInstance'] as js.JSFunction;
     deleteBindableArtboard = module['_deleteBindableArtboard'] as js.JSFunction;
     artboardAnimationCount = module['_artboardAnimationCount'] as js.JSFunction;
@@ -1060,10 +1078,6 @@ class RiveWasm {
         module['_stateMachineGetReportedEventCount'] as js.JSFunction;
     stateMachineReportedEventAt =
         module['stateMachineReportedEventAt'] as js.JSFunction;
-    stateMachineInstanceKeyInput =
-        module['_stateMachineInstanceKeyInput'] as js.JSFunction;
-    stateMachineInstanceTextInput =
-        module['_stateMachineInstanceTextInput'] as js.JSFunction;
     deleteEvent = module['_deleteEvent'] as js.JSFunction;
     deleteCustomProperty = module['_deleteCustomProperty'] as js.JSFunction;
     getEventName = module['_getEventName'] as js.JSFunction;
@@ -1114,6 +1128,10 @@ class RiveWasm {
         module['_artboardHeightIntrinsicallySizeOverride'] as js.JSFunction;
     updateLayoutBounds = module['_updateLayoutBounds'] as js.JSFunction;
     cascadeLayoutStyle = module['_cascadeLayoutStyle'] as js.JSFunction;
+    cascadeLayoutStyleBatch =
+        module['_cascadeLayoutStyleBatch'] as js.JSFunction;
+    cascadeCollapseBatch = module['_cascadeCollapseBatch'] as js.JSFunction?;
+    cascadeCollapse = module['_cascadeCollapse'] as js.JSFunction?;
 
     makeFlutterRenderImage = module['_makeFlutterRenderImage'] as js.JSFunction;
     flutterRenderImageId = module['_flutterRenderImageId'] as js.JSFunction;
@@ -1153,6 +1171,8 @@ class RiveWasm {
         module['_setViewModelInstanceEnumValue'] as js.JSFunction;
     setViewModelInstanceSymbolListIndexValue =
         module['_setViewModelInstanceSymbolListIndexValue'] as js.JSFunction;
+    setViewModelInstanceListValue =
+        module['_setViewModelInstanceListValue'] as js.JSFunction;
     copyViewModelInstance = module['_copyViewModelInstance'] as js.JSFunction;
     riveDataBindDirt = module['_riveDataBindDirt'] as js.JSFunction;
     riveDataBindSetDirt = module['_riveDataBindSetDirt'] as js.JSFunction;
@@ -1196,7 +1216,26 @@ class RiveWasm {
         module['_setViewModelInstanceArtboardCallback'] as js.JSFunction;
     setViewModelInstanceListCallback =
         module['_setViewModelInstanceListCallback'] as js.JSFunction;
+    setViewModelInstanceViewModelValue =
+        module['_setViewModelInstanceViewModelValue'] as js.JSFunction;
+    setViewModelInstanceViewModelCallback =
+        module['_setViewModelInstanceViewModelCallback'] as js.JSFunction;
     initBindingCallbacks = module['initBindingCallbacks'] as js.JSFunction;
+
+    // Focus-related artboard/state machine functions
+    artboardRootFocusDataCount =
+        module['_artboardRootFocusDataCount'] as js.JSFunction?;
+    artboardRootFocusNodeAt =
+        module['_artboardRootFocusNodeAt'] as js.JSFunction?;
+    artboardSetExternalParentFocusNode =
+        module['_artboardSetExternalParentFocusNode'] as js.JSFunction?;
+    artboardBuildFocusTreeWithParent =
+        module['_artboardBuildFocusTreeWithParent'] as js.JSFunction;
+    stateMachineGetFocusManager =
+        module['_stateMachineGetFocusManager'] as js.JSFunction;
+    stateMachineSetExternalFocusManager =
+        module['_stateMachineSetExternalFocusManager'] as js.JSFunction;
+
     deleteDashPathEffect = module['_deleteDashPathEffect'] as js.JSFunction;
     makeDashPathEffect = module['_makeDashPathEffect'] as js.JSFunction;
     dashPathEffectGetOffset =
@@ -1310,14 +1349,14 @@ class RiveWasm {
     riveAdvanceFrameId = module['_riveAdvanceFrameId'] as js.JSFunction;
 
     // Profiler bindings
-    profilerStart = module['profilerStart'] as js.JSFunction;
-    profilerStop = module['profilerStop'] as js.JSFunction;
-    profilerIsActive = module['profilerIsActive'] as js.JSFunction;
-    profilerDump = module['profilerDump'] as js.JSFunction;
-    profilerGetBufferPtr = module['profilerGetBufferPtr'] as js.JSFunction;
-    profilerGetBufferSize = module['profilerGetBufferSize'] as js.JSFunction;
-    profilerFreeBuffer = module['profilerFreeBuffer'] as js.JSFunction;
-    profilerEndFrame = module['profilerEndFrame'] as js.JSFunction;
+    profilerStart = module['profilerStart'] as js.JSFunction?;
+    profilerStop = module['profilerStop'] as js.JSFunction?;
+    profilerIsActive = module['profilerIsActive'] as js.JSFunction?;
+    profilerDump = module['profilerDump'] as js.JSFunction?;
+    profilerGetBufferPtr = module['profilerGetBufferPtr'] as js.JSFunction?;
+    profilerGetBufferSize = module['profilerGetBufferSize'] as js.JSFunction?;
+    profilerFreeBuffer = module['profilerFreeBuffer'] as js.JSFunction?;
+    profilerEndFrame = module['profilerEndFrame'] as js.JSFunction?;
 
     WebRiveFactory.instance.pointer =
         (module['_rendererContext'] as js.JSFunction).callAsFunction(null)
@@ -1402,7 +1441,10 @@ Future<RiveNative?> _loadWasm(String source, String name) async {
   var completer = Completer<RiveNative?>();
   thenFunction.callAsFunction(
     promise,
-    (js.JSObject module) {
+    (js.JSAny? moduleAny) {
+      // dart:js_interop delivers promise resolution values as JSAny?; cast
+      // to JSObject after the fact so the .toJS wrapper doesn't throw.
+      final module = moduleAny as js.JSObject;
       RiveWasm.link(module);
       LayoutEngineWasm.link(module);
       if (!isRuntimeEnvironment) {
@@ -1412,9 +1454,10 @@ Future<RiveNative?> _loadWasm(String source, String name) async {
       }
       TextEngine.link(module);
       AudioEngineWasm.link(module);
+      FocusManagerWasm.link(module);
       completer.complete(_WebRiveNative());
     }.toJS,
-    ((js.JSObject error) => completer.complete(null)).toJS,
+    ((js.JSAny? error) => completer.complete(null)).toJS,
   );
   return completer.future;
 }

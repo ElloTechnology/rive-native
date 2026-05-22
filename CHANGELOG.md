@@ -1,3 +1,9 @@
+## 0.1.5
+
+- Updates the Rive C++ runtime and renderer for the latest features, bug fixes, and performance improvements.
+
+- Add optional `viewModelInstance` parameter to `File.artboardToBind`, allowing a `ViewModelInstance` to be bound to a `BindableArtboard`. When provided, the view model instance is set on the artboard property in the core runtime.
+
 ## 0.1.4
 
 - Updates the Rive C++ runtime and renderer for the latest features, bug fixes, and performance improvements.

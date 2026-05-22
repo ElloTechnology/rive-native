@@ -6,6 +6,7 @@ import 'package:flutter/services.dart'
     show AssetBundle, LogicalKeyboardKey, rootBundle;
 import 'package:http/http.dart' as http;
 import 'package:meta/meta.dart';
+import 'package:rive_native/focus.dart' as focus;
 import 'package:rive_native/rive_luau.dart';
 
 import '../rive_native.dart';
@@ -222,7 +223,20 @@ abstract class File {
   /// Returns a bindable artboard reference for use with data binding.
   ///
   /// Use this to set an artboard property on a [ViewModelInstanceArtboard].
-  BindableArtboard? artboardToBind(String name);
+  ///
+  /// If [viewModelInstance] is provided, the artboard will be bound to the
+  /// given view model instance instead of the default one.
+  ///
+  /// The provided [viewModelInstance] must remain alive and valid for at least
+  /// as long as the returned [BindableArtboard] is in use (for example, until
+  /// it has been assigned to its target and is no longer referenced). Letting
+  /// [viewModelInstance] be garbage collected, finalized, or otherwise
+  /// disposed while the binding is still active may result in undefined
+  /// behavior or runtime errors in the underlying native implementation.
+  BindableArtboard? artboardToBind(
+    String name, {
+    ViewModelInstance? viewModelInstance,
+  });
 
   /// This method is used internally and should not be called directly.
   @internal
@@ -1118,7 +1132,45 @@ abstract class Artboard {
   /// Returns the number of state machines in this artboard.
   int stateMachineCount();
 
-  /// Whether the artboard origin is at frame center (true) or original position.
+  /// Get count of root FocusData nodes in this artboard.
+  /// Root FocusData nodes are those without a parent FocusData within this
+  /// artboard.
+  int get rootFocusDataCount;
+
+  /// Get the FocusNode for root FocusData at index.
+  /// Returns null if index is out of bounds.
+  focus.FocusNode? rootFocusNodeAt(int index);
+
+  /// Set an external parent FocusNode for this artboard's root-level focus
+  /// nodes. This is used when the artboard is nested inside another artboard
+  /// that has a FocusData in its hierarchy. The external parent allows focus
+  /// nodes in this artboard to be children of a FocusData in the host
+  /// artboard, even across artboard boundaries.
+  void setExternalParentFocusNode(focus.FocusNode? node);
+
+  /// Build the focus tree for this artboard using a parent FocusNode.
+  /// The FocusManager is derived from the parent node's manager() reference.
+  /// This is a convenience method for nested artboards - pass the parent's
+  /// FocusNode and the artboard will automatically register its focus nodes
+  /// with the correct manager.
+  void buildFocusTreeWithParent(focus.FocusNode? parentNode);
+
+  /// Get all root FocusNodes from this artboard.
+  /// These are FocusNodes from FocusData objects that don't have a parent
+  /// FocusData within this artboard.
+  List<focus.FocusNode> getRootFocusNodes() {
+    final nodes = <focus.FocusNode>[];
+    for (int i = 0; i < rootFocusDataCount; i++) {
+      final node = rootFocusNodeAt(i);
+      if (node != null) {
+        nodes.add(node);
+      }
+    }
+    return nodes;
+  }
+
+  /// Whether the artboard origin is at frame center (true) or original
+  /// position.
   bool get frameOrigin;
 
   /// Sets whether the artboard origin is at frame center or original position.
@@ -1224,7 +1276,40 @@ abstract class Artboard {
   @internal
   void updateLayoutBounds(bool animate);
   @internal
-  void cascadeLayoutStyle(int direction);
+  void cascadeLayoutStyle(
+      int direction,
+      int interpolationType,
+      double interpolationTime,
+      int interpolatorTypeKey,
+      double p0,
+      double p1,
+      double p2,
+      double p3);
+
+  /// Applies [cascadeLayoutStyle] to every artboard in [artboards] in a single
+  /// FFI/WASM round trip. The implementation packs native pointers into a
+  /// scratch buffer (reused across calls) and crosses the boundary once.
+  @internal
+  void cascadeLayoutStyleBatch(
+      List<Artboard> artboards,
+      int direction,
+      int interpolationType,
+      double interpolationTime,
+      int interpolatorTypeKey,
+      double p0,
+      double p1,
+      double p2,
+      double p3);
+
+  @internal
+  void cascadeCollapse(bool collapse);
+
+  /// Applies [cascadeCollapse] to every artboard in [artboards] in a single
+  /// FFI/WASM round trip. The implementation packs native pointers into a
+  /// scratch buffer (reused across calls) and crosses the boundary once.
+  @internal
+  void cascadeCollapseBatch(List<Artboard> artboards, bool collapse);
+
   @internal
   bool updatePass();
   @internal
@@ -1293,6 +1378,19 @@ abstract class Artboard {
   /// This method is used internally and should not be called directly.
   @internal
   void internalUpdateDataBinds();
+
+  /// Get the native pointer address for this artboard.
+  /// Used internally for comparing artboard identity across FFI boundaries.
+  /// Returns null on platforms that don't support this (e.g., web).
+  @internal
+  int? get nativePointerAddress;
+
+  /// Get a unique identifier for this artboard instance.
+  /// Used for matching artboards across FFI boundaries (e.g., in scroll-into-view
+  /// callbacks from native code).
+  /// Returns null on platforms that don't support this.
+  @internal
+  int? get artboardUniqueId;
 }
 
 /// A reference to an artboard that can be bound to a view model property.
@@ -1394,14 +1492,15 @@ abstract interface class InternalViewModelInstanceArtboard
 /// Use [ViewModelInstance] instead.
 @internal
 abstract interface class InternalViewModelInstanceViewModel
-    implements InternalViewModelInstanceValue<void> {
+    implements InternalViewModelInstanceValue<InternalViewModelInstance?> {
   InternalViewModelInstance get referenceViewModelInstance;
 }
 
 /// This class is used internally and should not be used directly.
 @internal
 abstract interface class InternalViewModelInstanceList
-    implements InternalViewModelInstanceValue<void> {
+    implements
+        InternalViewModelInstanceValue<List<InternalViewModelInstance>?> {
   InternalViewModelInstance referenceViewModelInstance(int index);
   int size();
 }
@@ -2027,6 +2126,10 @@ abstract class StateMachine
     removeAllAdvanceRequestListeners();
   }
 
+  /// Get the focus manager for this state machine.
+  /// Returns the active focus manager (external if set, internal otherwise).
+  focus.FocusManager? get focusManager;
+
   /// Returns a list of all inputs in the state machine.
   @Deprecated(_useDataBindingDeprecationMessageSMInput)
   List<Input> get inputs {
@@ -2154,12 +2257,6 @@ abstract class StateMachine
   @internal
   bool get isDone;
 
-  @internal
-  bool keyInput(Key value, Iterable<KeyModifiers> modifiers, bool isPressed,
-      bool isRepeat);
-  @internal
-  bool textInput(String value);
-
   /// This method is used internally and should not be called directly.
   /// Instead, use the [bindViewModelInstance] method.
   @internal
@@ -2169,6 +2266,14 @@ abstract class StateMachine
   /// Instead, use the [bindViewModelInstance] method.
   @internal
   void internalDataContext(InternalDataContext dataContext);
+
+  /// Set an external focus manager for this state machine via native pointer address.
+  /// This allows the state machine to use a focus manager owned by a parent
+  /// artboard/state machine, enabling unified focus management across nested
+  /// artboards.
+  /// Pass null to clear the external focus manager.
+  @internal
+  void setExternalFocusManager(int? pointerAddress);
 }
 
 /// Interface for requesting advance/repaint from a higher-level controller.

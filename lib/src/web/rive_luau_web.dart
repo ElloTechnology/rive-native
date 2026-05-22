@@ -79,6 +79,16 @@ late js.JSFunction _riveLuaPushMatrixX;
 late js.JSFunction _riveLuaPushMatrixY;
 late js.JSFunction _riveLuaToVector;
 late js.JSFunction _riveLuaPushPointerEvent;
+late js.JSFunction _riveLuaPushPointerListenerInvocation;
+late js.JSFunction _riveLuaPushKeyboardListenerInvocation;
+late js.JSFunction _riveLuaPushScriptedKeyboardInvocation;
+late js.JSFunction _riveLuaPushTextInputListenerInvocation;
+late js.JSFunction _riveLuaPushScriptedTextInputInvocation;
+late js.JSFunction _riveLuaPushFocusListenerInvocation;
+late js.JSFunction _riveLuaPushReportedEventListenerInvocation;
+late js.JSFunction _riveLuaPushViewModelChangeListenerInvocation;
+late js.JSFunction _riveLuaPushNoneListenerInvocation;
+late js.JSFunction _riveLuaPushGamepadListenerInvocation;
 late js.JSFunction _riveLuaPointerEventHitResult;
 late js.JSFunction _riveLuaCreateTable;
 late js.JSFunction _riveLuaRemove;
@@ -187,6 +197,26 @@ class LuauStateWasm extends LuauState {
     _riveLuaToVector = module['_lua_tovector'] as js.JSFunction;
     _riveLuaPushPointerEvent =
         module['_riveLuaPushPointerEvent'] as js.JSFunction;
+    _riveLuaPushPointerListenerInvocation =
+        module['_riveLuaPushPointerListenerInvocation'] as js.JSFunction;
+    _riveLuaPushKeyboardListenerInvocation =
+        module['_riveLuaPushKeyboardListenerInvocation'] as js.JSFunction;
+    _riveLuaPushScriptedKeyboardInvocation =
+        module['_riveLuaPushScriptedKeyboardInvocation'] as js.JSFunction;
+    _riveLuaPushTextInputListenerInvocation =
+        module['_riveLuaPushTextInputListenerInvocation'] as js.JSFunction;
+    _riveLuaPushScriptedTextInputInvocation =
+        module['_riveLuaPushScriptedTextInputInvocation'] as js.JSFunction;
+    _riveLuaPushFocusListenerInvocation =
+        module['_riveLuaPushFocusListenerInvocation'] as js.JSFunction;
+    _riveLuaPushReportedEventListenerInvocation =
+        module['_riveLuaPushReportedEventListenerInvocation'] as js.JSFunction;
+    _riveLuaPushViewModelChangeListenerInvocation =
+        module['_riveLuaPushViewModelChangeListenerInvocation'] as js.JSFunction;
+    _riveLuaPushNoneListenerInvocation =
+        module['_riveLuaPushNoneListenerInvocation'] as js.JSFunction;
+    _riveLuaPushGamepadListenerInvocation =
+        module['_riveLuaPushGamepadListenerInvocation'] as js.JSFunction;
     _riveLuaPointerEventHitResult =
         module['_riveLuaPointerEventHitResult'] as js.JSFunction;
     _riveLuaCreateTable = module['_lua_createtable'] as js.JSFunction;
@@ -749,6 +779,116 @@ class LuauStateWasm extends LuauState {
           position.y.toJS,
         ) as js.JSNumber,
       );
+
+  @override
+  void pushPointerListenerInvocation(int id, Vec2D position,
+      Vec2D previousPosition, int listenerType, double timeStamp) {
+    _riveLuaPushPointerListenerInvocation.callAsFunctionEx(
+      null,
+      _nativePtr,
+      id.toJS,
+      position.x.toJS,
+      position.y.toJS,
+      previousPosition.x.toJS,
+      previousPosition.y.toJS,
+      listenerType.toJS,
+      timeStamp.toJS,
+    );
+  }
+
+  @override
+  void pushKeyboardListenerInvocation(int key, int modifiers, bool isPressed,
+      bool isRepeat) {
+    _riveLuaPushKeyboardListenerInvocation.callAsFunctionEx(
+      null,
+      _nativePtr,
+      key.toJS,
+      modifiers.toJS,
+      (isPressed ? 1 : 0).toJS,
+      (isRepeat ? 1 : 0).toJS,
+    );
+  }
+
+  @override
+  void pushScriptedKeyboardInvocation(int key, int modifiers, bool isPressed,
+      bool isRepeat) {
+    _riveLuaPushScriptedKeyboardInvocation.callAsFunctionEx(
+      null,
+      _nativePtr,
+      key.toJS,
+      modifiers.toJS,
+      (isPressed ? 1 : 0).toJS,
+      (isRepeat ? 1 : 0).toJS,
+    );
+  }
+
+  @override
+  void pushTextInputListenerInvocation(String text) {
+    RiveWasm.toNativeString(text, (textPointer) {
+      _riveLuaPushTextInputListenerInvocation.callAsFunction(
+        null,
+        _nativePtr,
+        textPointer,
+      );
+    });
+  }
+
+  @override
+  void pushScriptedTextInputInvocation(String text) {
+    RiveWasm.toNativeString(text, (textPointer) {
+      _riveLuaPushScriptedTextInputInvocation.callAsFunction(
+        null,
+        _nativePtr,
+        textPointer,
+      );
+    });
+  }
+
+  @override
+  void pushFocusListenerInvocation(bool isFocus) {
+    _riveLuaPushFocusListenerInvocation.callAsFunction(
+      null,
+      _nativePtr,
+      (isFocus ? 1 : 0).toJS,
+    );
+  }
+
+  @override
+  void pushReportedEventListenerInvocation(double delaySeconds) {
+    _riveLuaPushReportedEventListenerInvocation.callAsFunction(
+      null,
+      _nativePtr,
+      delaySeconds.toJS,
+    );
+  }
+
+  @override
+  void pushViewModelChangeListenerInvocation() {
+    _riveLuaPushViewModelChangeListenerInvocation.callAsFunction(
+      null,
+      _nativePtr,
+    );
+  }
+
+  @override
+  void pushNoneListenerInvocation() {
+    _riveLuaPushNoneListenerInvocation.callAsFunction(
+      null,
+      _nativePtr,
+    );
+  }
+
+  @override
+  void pushGamepadListenerInvocation(
+      int deviceId, int buttonMask, double axis0) {
+    _riveLuaPushGamepadListenerInvocation.callAsFunctionEx(
+      null,
+      _nativePtr,
+      deviceId.toJS,
+      buttonMask.toJS,
+      axis0.toJS,
+    );
+  }
 
   @override
   void createTable({int arraySize = 0, int recordCount = 0}) =>

@@ -75,9 +75,17 @@ public:
                      bool skipOnUnclipped,
                      ArtboardInstance* artboard) override;
     Vec2D hostTransformPoint(const Vec2D& vec, ArtboardInstance*) override;
+    Mat2D worldTransformForArtboard(ArtboardInstance*) override;
     void markHostTransformDirty() override { markTransformDirty(); }
+    Component* hostComponent() override { return this; }
     bool syncStyleChanges() override;
     void updateLayoutBounds(bool animate = true) override;
+#ifdef WITH_RIVE_LAYOUT
+    bool cascadeLayoutStyle(LayoutStyleInterpolation inheritedInterpolation,
+                            KeyFrameInterpolator* inheritedInterpolator,
+                            float inheritedInterpolationTime,
+                            LayoutDirection direction) override;
+#endif
     void markLayoutNodeDirty(
         bool shouldForceUpdateLayoutBounds = false) override;
     bool isLayoutProvider() override { return true; }
@@ -168,6 +176,17 @@ private:
     std::unordered_map<ArtboardInstance*, ArtboardComponentListOverride*>
         m_artboardOverridesMap;
     std::unordered_map<int, int> m_artboardMapRules;
+
+    // Data binds that bridge properties between a stateful component's
+    // cloned ViewModelInstance and the original (user-provided) one.
+    // Keyed by list item so they can be cleaned up when the item is removed.
+    std::unordered_map<rcp<ViewModelInstanceListItem>,
+                       std::vector<std::unique_ptr<DataBind>>>
+        m_bridgeDataBinds;
+    void createBridgeBinds(rcp<ViewModelInstanceListItem> listItem,
+                           ViewModelInstance* original,
+                           ViewModelInstance* clone);
+    void removeBridgeBinds(const rcp<ViewModelInstanceListItem>& listItem);
     void attachArtboardOverride(ArtboardInstance*,
                                 rcp<ViewModelInstanceListItem>);
     void clearArtboardOverride(ArtboardInstance*);

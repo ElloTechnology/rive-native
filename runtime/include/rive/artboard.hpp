@@ -20,6 +20,7 @@
 #include "rive/math/raw_path.hpp"
 #include "rive/typed_children.hpp"
 #include "rive/virtualizing_component.hpp"
+#include "rive/input/focus_node.hpp"
 
 #include <queue>
 #include <unordered_set>
@@ -27,6 +28,7 @@
 
 namespace rive
 {
+class KeyFrameInterpolator;
 class ArtboardComponentList;
 class ArtboardHost;
 class File;
@@ -50,6 +52,7 @@ class SMITrigger;
 class DataBind;
 class DataBindContainer;
 class ScriptedObject;
+class FocusManager;
 
 #ifdef WITH_RIVE_TOOLS
 typedef void (*ArtboardCallback)(void*);
@@ -94,6 +97,7 @@ private:
     bool m_FrameOrigin = true;
     std::unordered_set<LayoutComponent*> m_dirtyLayout;
     bool m_isCleaningDirtyLayouts = false;
+    std::unique_ptr<KeyFrameInterpolator> m_ownedInheritedInterpolator;
     float m_originalWidth = 0;
     float m_originalHeight = 0;
     bool m_updatesOwnLayout = true;
@@ -101,6 +105,10 @@ private:
     bool m_didChange = true;
     Artboard* parentArtboard() const;
     ArtboardHost* m_host = nullptr;
+    FocusManager* m_activeFocusManager = nullptr;
+#ifdef WITH_RIVE_TOOLS
+    rcp<FocusNode> m_externalParentFocusNode;
+#endif
     static uint64_t sm_frameId;
     bool sharesLayoutWithHost() const;
     void cloneObjectDataBinds(const Core* object,
@@ -139,6 +147,50 @@ public:
     ArtboardHost* host() const;
     void addedToHost() { m_justAddedToHost = true; }
 
+    /// Set the active FocusManager for this artboard. The FocusManager is
+    /// typically owned by a StateMachineInstance.
+    void setActiveFocusManager(FocusManager* manager)
+    {
+        m_activeFocusManager = manager;
+    }
+    /// Get the active FocusManager for this artboard.
+    FocusManager* focusManager() const { return m_activeFocusManager; }
+
+#ifdef WITH_RIVE_TOOLS
+    /// Set an external parent FocusNode for this artboard's root-level focus
+    /// nodes. This is used when the artboard is nested inside another artboard
+    /// that has a FocusData in its hierarchy. The external parent allows focus
+    /// nodes in this artboard to be children of a FocusData in the host
+    /// artboard.
+    void setExternalParentFocusNode(rcp<FocusNode> node);
+    /// Get the external parent FocusNode for this artboard.
+    rcp<FocusNode> externalParentFocusNode() const;
+    // collapseSingle is only used by the editor. Its purpose is to set the
+    // collapse value to the immediate artboard but not to its children
+    void collapseSingle(bool);
+#endif
+
+    /// Build the focus tree for this artboard, registering all FocusData nodes
+    /// with the given FocusManager.
+    /// @param focusManager The FocusManager to register nodes with
+    /// @param parentFocusNode Optional parent node for root-level focus nodes
+    ///        (used for nested artboards to connect to parent's focus tree)
+    void buildFocusTree(FocusManager* focusManager,
+                        rcp<FocusNode> parentFocusNode = nullptr);
+
+    /// Build the focus tree for this artboard using the parent node's manager.
+    /// This is a convenience overload for nested artboards - the FocusManager
+    /// is derived from the parent node's manager() reference.
+    /// @param parentFocusNode The parent node to attach this artboard's focus
+    ///        nodes under. Must have a valid manager() or this is a no-op.
+    void buildFocusTree(rcp<FocusNode> parentFocusNode);
+
+    /// Clean up the focus tree for this artboard, removing all FocusData nodes
+    /// from the FocusManager. This should be called before the artboard is
+    /// destroyed or recycled to prevent use-after-free when the FocusManager
+    /// still holds references to FocusNodes pointing to deleted FocusData.
+    void cleanupFocusTree();
+
     // Implemented for ShapePaintContainer.
     const Mat2D& shapeWorldTransform() const override
     {
@@ -157,6 +209,7 @@ public:
     void addObject(Core* object);
     void addAnimation(LinearAnimation* object);
     void addStateMachine(StateMachine* object);
+    void buildDataContext(rcp<DataContext> value);
 
 public:
     Artboard();
@@ -220,6 +273,10 @@ public:
     LayoutData* takeLayoutData();
     bool syncStyleChanges() override;
     void syncStyleChangesWithUpdate(bool forceUpdate = false);
+    std::unique_ptr<KeyFrameInterpolator>& ownedInheritedInterpolator()
+    {
+        return m_ownedInheritedInterpolator;
+    }
     void calculateLayout();
     bool canHaveOverrides() override { return true; }
 
@@ -293,9 +350,11 @@ public:
     void clearDataContext();
     void unbind();
     void rebind() override;
+    void relinkDataContext() override;
     void bindViewModelInstance(rcp<ViewModelInstance> viewModelInstance,
                                rcp<DataContext> parent);
     void bindViewModelInstance(rcp<ViewModelInstance> viewModelInstance);
+    void rebuildDataBind(DataBind*) override;
 
     bool hasAudio() const;
 
@@ -370,6 +429,15 @@ public:
 
     size_t animationCount() const { return m_Animations.size(); }
     std::string animationNameAt(size_t index) const;
+
+    /// Returns the count of FocusData objects that don't have a parent
+    /// FocusData within this artboard (i.e., "root" focus nodes from this
+    /// artboard's perspective).
+    size_t rootFocusDataCount() const;
+
+    /// Returns the FocusData at the given index among root FocusData objects.
+    /// Returns nullptr if index is out of bounds.
+    class FocusData* rootFocusDataAt(size_t index) const;
 
     size_t stateMachineCount() const { return m_StateMachines.size(); }
     std::string stateMachineNameAt(size_t index) const;

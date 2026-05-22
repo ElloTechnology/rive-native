@@ -502,13 +502,23 @@ INLINE void resolve_paint(uint pathID,
     // Apply the advanced blend mode, if applicable.
     ushort blendMode;
     if (@ENABLE_ADVANCED_BLEND && fragColorOut.a != .0 &&
-        (blendMode = cast_uint_to_ushort((paintData.x >> 4) & 0xfu)) != 0u)
+        (blendMode = cast_uint_to_ushort((paintData.x >> 4) & 0xfu)) !=
+            BLEND_SRC_OVER)
     {
         half4 dstColorPremul = PLS_LOAD4F(colorBuffer);
         fragColorOut.rgb =
             advanced_color_blend(fragColorOut.rgb, dstColorPremul, blendMode);
     }
 #endif // !FIXED_FUNCTION_COLOR_OUTPUT && ENABLE_ADVANCED_BLEND
+
+// Certain platforms give us less control of the format of what we are
+// rendering too. Specifically, we are auto converted from linear -> sRGB on
+// render target writes in unreal. In those cases we made need to end up in
+// linear color space
+#if defined(@NEEDS_GAMMA_CORRECTION) &&                                        \
+    (defined(@FIXED_FUNCTION_COLOR_OUTPUT) || defined(@RESOLVE_PLS))
+    fragColorOut = gamma_to_linear(fragColorOut);
+#endif
 
     fragColorOut.rgb *= fragColorOut.a;
 }
@@ -692,9 +702,10 @@ ATOMIC_PLS_MAIN(@drawFragmentMain)
 
     half coverage;
 #ifdef @ATLAS_BLIT
-    coverage = filter_feather_atlas(
-        v_atlasCoord,
-        uniforms.atlasTextureInverseSize TEXTURE_CONTEXT_FORWARD);
+    coverage = clamp(
+        TEXTURE_SAMPLE_LOD(@atlasTexture, atlasSampler, v_atlasCoord, .0).r,
+        make_half(.0),
+        make_half(1.));
 #else
     coverage = v_windingWeight;
 #endif
@@ -899,13 +910,6 @@ ATOMIC_PLS_MAIN(@drawFragmentMain)
     resolve_paint(lastPathID,
                   coverageCount,
                   fragColorOut FRAGMENT_CONTEXT_UNPACK PLS_CONTEXT_UNPACK);
-// Certain platforms give us less control of the format of what we are
-// rendering too. Specifically, we are auto converted from linear -> sRGB on
-// render target writes in unreal. In those cases we made need to end up in
-// linear color space
-#ifdef @NEEDS_GAMMA_CORRECTION
-    fragColorOut = gamma_to_linear(fragColorOut);
-#endif
 #ifdef @COALESCED_PLS_RESOLVE_AND_TRANSFER
     float oneMinusSrcAlpha = 1. - fragColorOut.a;
     if (oneMinusSrcAlpha != .0)

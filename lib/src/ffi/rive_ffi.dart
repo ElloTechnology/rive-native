@@ -7,6 +7,7 @@ import 'dart:ui' show Color;
 
 import 'package:ffi/ffi.dart';
 import 'package:meta/meta.dart';
+import 'package:rive_native/focus.dart' as focus;
 import 'package:rive_native/math.dart';
 import 'package:rive_native/rive_audio.dart';
 import 'package:rive_native/rive_luau.dart';
@@ -18,6 +19,7 @@ import 'package:rive_native/src/ffi/rive_audio_ffi.dart';
 import 'package:rive_native/src/ffi/rive_data_binding_ffi.dart';
 import 'package:rive_native/src/ffi/rive_event_ffi.dart';
 import 'package:rive_native/src/ffi/rive_ffi_reference.dart';
+import 'package:rive_native/src/ffi/rive_focus_ffi.dart';
 import 'package:rive_native/src/ffi/rive_renderer_ffi.dart';
 import 'package:rive_native/src/ffi/rive_luau_ffi.dart'
     show riveFileSetScriptingVM, LuauStateFFI;
@@ -58,6 +60,9 @@ typedef ViewModelArtboardCallback
     = Pointer<NativeFunction<Void Function(Uint64, Int)>>;
 
 typedef ViewModelListCallback = Pointer<NativeFunction<Void Function(Uint64)>>;
+
+typedef ViewModelViewModelCallback
+    = Pointer<NativeFunction<Void Function(Uint64)>>;
 
 typedef _StateMachineInputNative = Pointer<Void> Function(
     Pointer<Void> smi, Pointer<Void> inputName, Pointer<Void> path);
@@ -100,6 +105,7 @@ final void Function(
   ViewModelAssetCallback viewModelAssetCallback,
   ViewModelArtboardCallback viewModelArtboardCallback,
   ViewModelListCallback viewModelListCallback,
+  ViewModelViewModelCallback viewModelViewModelCallback,
 ) _initBindingCallbacks = nativeLib
     .lookup<
         NativeFunction<
@@ -114,6 +120,7 @@ final void Function(
               ViewModelAssetCallback,
               ViewModelArtboardCallback,
               ViewModelListCallback,
+              ViewModelViewModelCallback,
             )>>('initBindingCallbacks')
     .asFunction();
 
@@ -298,6 +305,36 @@ final int Function(Pointer<Void> artboard) _artboardStateMachineCount =
     nativeLib
         .lookup<NativeFunction<Uint64 Function(Pointer<Void>)>>(
             'artboardStateMachineCount')
+        .asFunction();
+final int Function(Pointer<Void> artboard) _artboardRootFocusDataCount =
+    nativeLib
+        .lookup<NativeFunction<Uint64 Function(Pointer<Void>)>>(
+            'artboardRootFocusDataCount')
+        .asFunction();
+final Pointer<Void> Function(Pointer<Void> artboard, int index)
+    _artboardRootFocusNodeAt = nativeLib
+        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>, Uint64)>>(
+            'artboardRootFocusNodeAt')
+        .asFunction();
+final void Function(Pointer<Void> artboard, Pointer<Void> focusNode)
+    _artboardSetExternalParentFocusNode = nativeLib
+        .lookup<NativeFunction<Void Function(Pointer<Void>, Pointer<Void>)>>(
+            'artboardSetExternalParentFocusNode')
+        .asFunction();
+final void Function(Pointer<Void> artboard, Pointer<Void> parentFocusNode)
+    _artboardBuildFocusTreeWithParent = nativeLib
+        .lookup<NativeFunction<Void Function(Pointer<Void>, Pointer<Void>)>>(
+            'artboardBuildFocusTreeWithParent')
+        .asFunction();
+final void Function(Pointer<Void> stateMachine, Pointer<Void> focusManager)
+    _stateMachineSetExternalFocusManager = nativeLib
+        .lookup<NativeFunction<Void Function(Pointer<Void>, Pointer<Void>)>>(
+            'stateMachineSetExternalFocusManager')
+        .asFunction();
+final Pointer<Void> Function(Pointer<Void> stateMachine)
+    _stateMachineGetFocusManager = nativeLib
+        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>)>>(
+            'stateMachineGetFocusManager')
         .asFunction();
 final Pointer<Void> Function(Pointer<Void> artboard, int index)
     _artboardAnimationAt = nativeLib
@@ -500,6 +537,11 @@ final Pointer<Utf8> Function(Pointer<Void> artboard) _artboardName = nativeLib
     .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Void> artboard)>>(
         'artboardName')
     .asFunction();
+final Pointer<Void> Function(Pointer<Void> artboard) _artboardGetInnerPointer =
+    nativeLib
+        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void> artboard)>>(
+            'artboardGetInnerPointer')
+        .asFunction();
 final Pointer<Void> Function(Pointer<Void> artboard, Pointer<Void> name)
     _artboardAnimationNamed = nativeLib
         .lookup<
@@ -606,9 +648,7 @@ final int Function(Pointer<Void> smi) _stateMachineInstanceStateChangedCount =
         .asFunction();
 final Pointer<Utf8> Function(Pointer<Void> smi, int index)
     _stateMachineInstanceStateChangedNameByIndex = nativeLib
-        .lookup<
-            NativeFunction<
-                Pointer<Utf8> Function(Pointer<Void>, Uint64)>>(
+        .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Void>, Uint64)>>(
             'stateMachineInstanceStateChangedNameByIndex')
         .asFunction();
 final bool Function(Pointer<Void> ami, double x, double y)
@@ -625,28 +665,6 @@ final int Function(
     .lookup<NativeFunction<Uint8 Function(Pointer<Void>, Float, Float, Int)>>(
         'stateMachineInstancePointerDown')
     .asFunction();
-final bool Function(Pointer<Void> ami, int value,
-        int modifiers, bool isPressed, bool isRepeat)
-    _stateMachineInstanceKeyInput = nativeLib
-        .lookup<
-            NativeFunction<
-                Bool Function(
-                  Pointer<Void>,
-                  Uint16,
-                  Uint8,
-                  Bool,
-                  Bool,
-                )>>('stateMachineInstanceKeyInput')
-        .asFunction();
-final bool Function(Pointer<Void> ami, Pointer<Utf8> text)
-    _stateMachineInstanceTextInput = nativeLib
-        .lookup<
-            NativeFunction<
-                Bool Function(
-                  Pointer<Void>,
-                  Pointer<Utf8>,
-                )>>('stateMachineInstanceTextInput')
-        .asFunction();
 final int Function(
   Pointer<Void> ami,
   double x,
@@ -1011,11 +1029,45 @@ final Pointer<Void> Function(Pointer<Void> artboard, bool) _updateLayoutBounds =
         .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>, Bool)>>(
             'updateLayoutBounds')
         .asFunction();
-final Pointer<Void> Function(Pointer<Void> artboard, int) _cascadeLayoutStyle =
+final void Function(Pointer<Void> artboard, int, int, double, int, double,
+        double, double, double) _cascadeLayoutStyle =
     nativeLib
-        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>, Uint64)>>(
-            'cascadeLayoutStyle')
+        .lookup<
+            NativeFunction<
+                Void Function(Pointer<Void>, Int32, Int32, Float, Int32, Float,
+                    Float, Float, Float)>>('cascadeLayoutStyle')
         .asFunction();
+final void Function(Pointer<Pointer<Void>> artboards, int count, int, int,
+        double, int, double, double, double, double) _cascadeLayoutStyleBatch =
+    nativeLib
+        .lookup<
+            NativeFunction<
+                Void Function(
+                    Pointer<Pointer<Void>>,
+                    Int32,
+                    Int32,
+                    Int32,
+                    Float,
+                    Int32,
+                    Float,
+                    Float,
+                    Float,
+                    Float)>>('cascadeLayoutStyleBatch')
+        .asFunction();
+final void Function(
+    Pointer<Pointer<Void>> artboards,
+    int count,
+    bool
+        collapse) _cascadeCollapseBatch = nativeLib
+    .lookup<NativeFunction<Void Function(Pointer<Pointer<Void>>, Int32, Bool)>>(
+        'cascadeCollapseBatch')
+    .asFunction();
+final void Function(Pointer<Void> artboards, bool collapse) _cascadeCollapse =
+    nativeLib
+        .lookup<NativeFunction<Void Function(Pointer<Void>, Bool)>>(
+            'cascadeCollapse')
+        .asFunction();
+
 void Function(Pointer<Void>, Pointer<NativeFunction<Void Function()>>)
     _setArtboardLayoutDirtyCallback = nativeLib
         .lookup<
@@ -1130,6 +1182,11 @@ final Pointer<Void> Function(Pointer<Void>) _setViewModelInstanceListCallback =
         .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>)>>(
             'setViewModelInstanceListCallback')
         .asFunction();
+final Pointer<Void> Function(Pointer<Void>)
+    _setViewModelInstanceViewModelCallback = nativeLib
+        .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>)>>(
+            'setViewModelInstanceViewModelCallback')
+        .asFunction();
 final int Function(Pointer<Void>) _viewModelInstanceListSize = nativeLib
     .lookup<NativeFunction<Size Function(Pointer<Void>)>>(
         'viewModelInstanceListSize')
@@ -1203,6 +1260,51 @@ final void Function(Pointer<Void>, int) _setViewModelInstanceArtboardValue =
         .lookup<NativeFunction<Void Function(Pointer<Void>, Uint32)>>(
             'setViewModelInstanceArtboardValue')
         .asFunction();
+final void Function(Pointer<Void>, Pointer<Void>)
+    _setViewModelInstanceViewModelValue = nativeLib
+        .lookup<NativeFunction<Void Function(Pointer<Void>, Pointer<Void>)>>(
+            'setViewModelInstanceViewModelValue')
+        .asFunction();
+final void Function(Pointer<Void>, Pointer<Pointer<Void>>, int)
+    _setViewModelInstanceListValue = nativeLib
+        .lookup<
+            NativeFunction<
+                Void Function(Pointer<Void>, Pointer<Pointer<Void>>,
+                    Uint64)>>('setViewModelInstanceListValue')
+        .asFunction();
+
+/// Reusable native buffer of [Pointer<Void>] entries.
+///
+/// Lazily allocates a fixed-capacity block on first use and reuses it for all
+/// calls within capacity. For larger lists it performs a one-shot
+/// malloc/call/free so there is no upper bound on list size.
+/// Uses a callback to guarantee the fallback allocation is always freed even
+/// if the caller throws.
+class _NativePointerScratchBuffer {
+  final int capacity;
+  Pointer<Pointer<Void>>? _buffer;
+
+  _NativePointerScratchBuffer(this.capacity);
+
+  void use(int count, void Function(Pointer<Pointer<Void>> ptr) fn) {
+    if (count <= capacity) {
+      _buffer ??=
+          malloc.allocate<Pointer<Void>>(capacity * sizeOf<Pointer<Void>>());
+      fn(_buffer!);
+    } else {
+      final tmp =
+          malloc.allocate<Pointer<Void>>(count * sizeOf<Pointer<Void>>());
+      try {
+        fn(tmp);
+      } finally {
+        malloc.free(tmp);
+      }
+    }
+  }
+}
+
+final _instanceListScratchBuffer = _NativePointerScratchBuffer(256);
+final _artboardBatchScratchBuffer = _NativePointerScratchBuffer(256);
 
 final Pointer<Void> Function(Pointer<Void>) _makeRawText = nativeLib
     .lookup<NativeFunction<Pointer<Void> Function(Pointer<Void>)>>(
@@ -1617,12 +1719,14 @@ abstract class _NativeVMIListRuntime {
 }
 
 abstract class _NativeVMIArtboardRuntime {
-  static final void Function(Pointer<Void> vmi, Pointer<Void> artboard)
-      setValue = nativeLib
+  static final void Function(Pointer<Void> vmi, Pointer<Void> artboard,
+          Pointer<Void> viewModelInstance) setValue =
+      nativeLib
           .lookup<
-              NativeFunction<
-                  Void Function(Pointer<Void> vmi,
-                      Pointer<Void> artboard)>>('setVMIArtboardRuntimeValue')
+                  NativeFunction<
+                      Void Function(Pointer<Void> vmi, Pointer<Void> artboard,
+                          Pointer<Void> viewModelInstance)>>(
+              'setVMIArtboardRuntimeValue')
           .asFunction();
 }
 
@@ -1851,6 +1955,13 @@ class FFIRiveFile extends File implements RiveFFIReference, Finalizable {
     }
   }
 
+  static void _vmViewModelCallback(int ptr) {
+    InternalViewModelInstanceValue? vmi = _instances[ptr];
+    if (vmi is FFIRiveInternalViewModelInstanceViewModel) {
+      vmi.syncValue();
+    }
+  }
+
   FFIRiveFile(this._pointer, this.riveFactory) {
     _finalizer.attach(this, _pointer.cast(), detach: this);
     _initBindingCallbacks(
@@ -1864,6 +1975,7 @@ class FFIRiveFile extends File implements RiveFFIReference, Finalizable {
       Pointer.fromFunction(_vmAssetCallback),
       Pointer.fromFunction(_vmArtboardCallback),
       Pointer.fromFunction(_vmListCallback),
+      Pointer.fromFunction(_vmViewModelCallback),
     );
   }
 
@@ -1907,14 +2019,24 @@ class FFIRiveFile extends File implements RiveFFIReference, Finalizable {
   }
 
   @override
-  BindableArtboard? artboardToBind(String name) {
+  BindableArtboard? artboardToBind(
+    String name, {
+    ViewModelInstance? viewModelInstance,
+  }) {
     var nativeString = name.toNativeUtf8();
     var ptr = _riveFileArtboardToBindNamed(pointer, nativeString.cast());
     malloc.free(nativeString);
     if (ptr == nullptr) {
       return null;
     }
-    return FFIBindableArtboard(ptr);
+    final ffiViewModelInstance =
+        viewModelInstance is FFIRiveViewModelInstanceRuntime
+            ? viewModelInstance
+            : null;
+    return FFIBindableArtboard(
+      ptr,
+      viewModelInstance: ffiViewModelInstance,
+    );
   }
 
   @override
@@ -2553,7 +2675,11 @@ class FFIViewModelInstanceArtboardRuntime
   @override
   set value(covariant FFIBindableArtboard value) {
     _rootViewModelInstance.requestAdvance();
-    _NativeVMIArtboardRuntime.setValue(pointer, value.pointer);
+    _NativeVMIArtboardRuntime.setValue(
+      pointer,
+      value.pointer,
+      value.viewModelInstancePointer,
+    );
   }
 }
 
@@ -2754,25 +2880,6 @@ class FFIStateMachine extends StateMachine
   }
 
   @override
-  bool keyInput(Key value, Iterable<KeyModifiers> modifiers, bool isPressed,
-      bool isRepeat) {
-    int pressedModifiers = 0;
-    for (final modifier in modifiers) {
-      pressedModifiers |= 1 << modifier.index;
-    }
-    return _stateMachineInstanceKeyInput(
-        pointer, value.value, pressedModifiers, isPressed, isRepeat);
-  }
-
-  @override
-  bool textInput(String value) {
-    var nativeString = value.toNativeUtf8();
-    final result = _stateMachineInstanceTextInput(pointer, nativeString);
-    malloc.free(nativeString);
-    return result;
-  }
-
-  @override
   void internalBindViewModelInstance(InternalViewModelInstance instance) {
     _stateMachineDataContextFromInstance(
         pointer, (instance as FFIRiveInternalViewModelInstance).pointer);
@@ -2822,6 +2929,27 @@ class FFIStateMachine extends StateMachine
       events.add(event);
     }
     return events;
+  }
+
+  /// Get the focus manager for this state machine.
+  /// Returns the active focus manager (external if set, internal otherwise).
+  @override
+  focus.FocusManager? get focusManager {
+    final ptr = _stateMachineGetFocusManager(pointer);
+    if (ptr == nullptr) {
+      return null;
+    }
+    return NativeFocusManagerWrapper(ptr);
+  }
+
+  /// Set an external focus manager to use instead of the internal one.
+  /// This allows nested artboards to share focus with their parent.
+  @override
+  void setExternalFocusManager(int? pointerAddress) {
+    final ptr = pointerAddress != null
+        ? Pointer<Void>.fromAddress(pointerAddress)
+        : nullptr;
+    _stateMachineSetExternalFocusManager(pointer, ptr);
   }
 }
 
@@ -3048,6 +3176,12 @@ class FFIRiveArtboard extends Artboard
   Pointer<Void> get pointer => _pointer;
   Pointer<Void> _pointer;
 
+  @override
+  int? get nativePointerAddress => _pointer.address;
+
+  @override
+  int? get artboardUniqueId => _artboardGetInnerPointer(_pointer).address;
+
   FFIRiveArtboard(this._pointer, this.riveFactory) {
     _finalizer.attach(this, _pointer.cast(), detach: this);
   }
@@ -3145,6 +3279,44 @@ class FFIRiveArtboard extends Artboard
 
   @override
   int stateMachineCount() => _artboardStateMachineCount(pointer);
+
+  @override
+  int get rootFocusDataCount => _artboardRootFocusDataCount(pointer);
+
+  @override
+  focus.FocusNode? rootFocusNodeAt(int index) {
+    final ptr = _artboardRootFocusNodeAt(pointer, index);
+    if (ptr == nullptr) {
+      return null;
+    }
+    return NativeFocusNodeWrapper(ptr);
+  }
+
+  @override
+  void setExternalParentFocusNode(focus.FocusNode? node) {
+    Pointer<Void> nodePtr;
+    if (node is NativeFocusNodeWrapper) {
+      nodePtr = node.pointer;
+    } else if (node is FocusNodeFFI) {
+      nodePtr = node.pointer;
+    } else {
+      nodePtr = nullptr;
+    }
+    _artboardSetExternalParentFocusNode(pointer, nodePtr);
+  }
+
+  @override
+  void buildFocusTreeWithParent(focus.FocusNode? parentNode) {
+    Pointer<Void> nodePtr;
+    if (parentNode is NativeFocusNodeWrapper) {
+      nodePtr = parentNode.pointer;
+    } else if (parentNode is FocusNodeFFI) {
+      nodePtr = parentNode.pointer;
+    } else {
+      nodePtr = nullptr;
+    }
+    _artboardBuildFocusTreeWithParent(pointer, nodePtr);
+  }
 
   @override
   Animation animationAt(int index) {
@@ -3267,8 +3439,8 @@ class FFIRiveArtboard extends Artboard
 
   @override
   void resetArtboardSize() {
-    width = heightOriginal;
-    height = widthOriginal;
+    width = widthOriginal;
+    height = heightOriginal;
   }
 
   @override
@@ -3338,7 +3510,7 @@ class FFIRiveArtboard extends Artboard
 
   @override
   CallbackHandler onRootTransform(
-      double Function(Vec2D position, bool skip) callback) {
+      double Function(Vec2D position, bool xAxis) callback) {
     final nativeCallback = NativeCallable<
             Float Function(Pointer<Void>, Float, Float, Bool)>.isolateLocal(
         (Pointer<Void> artboardPtr, double x, double y, bool xAxis) {
@@ -3415,8 +3587,54 @@ class FFIRiveArtboard extends Artboard
       _updateLayoutBounds(pointer, animate);
 
   @override
-  void cascadeLayoutStyle(int direction) =>
-      _cascadeLayoutStyle(pointer, direction);
+  void cascadeLayoutStyle(
+          int direction,
+          int interpolationType,
+          double interpolationTime,
+          int interpolatorTypeKey,
+          double p0,
+          double p1,
+          double p2,
+          double p3) =>
+      _cascadeLayoutStyle(pointer, direction, interpolationType,
+          interpolationTime, interpolatorTypeKey, p0, p1, p2, p3);
+
+  @override
+  void cascadeLayoutStyleBatch(
+      List<Artboard> artboards,
+      int direction,
+      int interpolationType,
+      double interpolationTime,
+      int interpolatorTypeKey,
+      double p0,
+      double p1,
+      double p2,
+      double p3) {
+    final count = artboards.length;
+    _artboardBatchScratchBuffer.use(count, (ptr) {
+      for (var i = 0; i < count; i++) {
+        ptr[i] = (artboards[i] as FFIRiveArtboard).pointer;
+      }
+      _cascadeLayoutStyleBatch(ptr, count, direction, interpolationType,
+          interpolationTime, interpolatorTypeKey, p0, p1, p2, p3);
+    });
+  }
+
+  @override
+  void cascadeCollapseBatch(List<Artboard> artboards, bool collapse) {
+    final count = artboards.length;
+    _artboardBatchScratchBuffer.use(count, (ptr) {
+      for (var i = 0; i < count; i++) {
+        ptr[i] = (artboards[i] as FFIRiveArtboard).pointer;
+      }
+      _cascadeCollapseBatch(ptr, count, collapse);
+    });
+  }
+
+  @override
+  void cascadeCollapse(bool collapse) {
+    _cascadeCollapse(pointer, collapse);
+  }
 
   @override
   void internalBindViewModelInstance(InternalViewModelInstance instance,
@@ -3509,7 +3727,17 @@ class FFIBindableArtboard extends BindableArtboard
   Pointer<Void> get pointer => _pointer;
   Pointer<Void> _pointer;
 
-  FFIBindableArtboard(this._pointer) {
+  /// Strong reference to avoid GC/finalization of the associated VMI while
+  /// this bindable artboard is still in use.
+  FFIRiveViewModelInstanceRuntime? _viewModelInstance;
+
+  Pointer<Void> get viewModelInstancePointer =>
+      _viewModelInstance?.pointer ?? nullptr;
+
+  FFIBindableArtboard(
+    this._pointer, {
+    FFIRiveViewModelInstanceRuntime? viewModelInstance,
+  }) : _viewModelInstance = viewModelInstance {
     _finalizer.attach(this, _pointer.cast(), detach: this);
   }
 
@@ -3518,6 +3746,7 @@ class FFIBindableArtboard extends BindableArtboard
     if (_pointer == nullptr) {
       return;
     }
+    _viewModelInstance = null;
     _deleteBindableArtboard(_pointer);
     _pointer = nullptr;
     _finalizer.detach(this);
@@ -3687,7 +3916,7 @@ class FFIRiveInternalViewModelInstance extends InternalViewModelInstance
 }
 
 class FFIRiveInternalViewModelInstanceViewModel
-    extends FFIInternalViewModelInstanceValue<void>
+    extends FFIInternalViewModelInstanceValue<InternalViewModelInstance?>
     implements RiveFFIReference, InternalViewModelInstanceViewModel {
   FFIRiveInternalViewModelInstanceViewModel(super.pointer);
 
@@ -3696,6 +3925,30 @@ class FFIRiveInternalViewModelInstanceViewModel
     final viewModelInstancePointer =
         _viewModelInstanceReferenceViewModel(pointer);
     return FFIRiveInternalViewModelInstance(viewModelInstancePointer);
+  }
+
+  syncValue() {
+    if (suppressCallback) {
+      return;
+    }
+    if (_callback != null) {
+      suppressCallback = true;
+      _callback!(null);
+      suppressCallback = false;
+    }
+  }
+
+  @override
+  Pointer<Void> getInstancePointer() {
+    return _setViewModelInstanceViewModelCallback(pointer);
+  }
+
+  @override
+  void applyValue(InternalViewModelInstance? val) {
+    if (val != null) {
+      _setViewModelInstanceViewModelValue(
+          pointer, (val as FFIRiveInternalViewModelInstance).pointer);
+    }
   }
 }
 
@@ -3798,7 +4051,7 @@ class FFIInternalViewModelInstanceEnum
 }
 
 class FFIRiveInternalViewModelInstanceList
-    extends FFIInternalViewModelInstanceValue<void>
+    extends FFIInternalViewModelInstanceValue<List<InternalViewModelInstance>?>
     implements RiveFFIReference, InternalViewModelInstanceList {
   FFIRiveInternalViewModelInstanceList(super.pointer);
 
@@ -3820,9 +4073,30 @@ class FFIRiveInternalViewModelInstanceList
     return listSize;
   }
 
+  @override
+  void applyValue(List<InternalViewModelInstance>? instances) {
+    if (instances == null || instances.isEmpty) {
+      _setViewModelInstanceListValue(
+          pointer, Pointer<Pointer<Void>>.fromAddress(0), 0);
+      return;
+    }
+    final count = instances.length;
+    _instanceListScratchBuffer.use(count, (ptr) {
+      for (var i = 0; i < count; i++) {
+        ptr[i] = (instances[i] as FFIRiveInternalViewModelInstance).pointer;
+      }
+      _setViewModelInstanceListValue(pointer, ptr, count);
+    });
+  }
+
   syncValue() {
+    if (suppressCallback) {
+      return;
+    }
     if (_callback != null) {
+      suppressCallback = true;
       _callback!(null);
+      suppressCallback = false;
     }
   }
 }

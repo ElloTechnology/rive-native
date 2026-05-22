@@ -90,7 +90,7 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   luau_analyzer
   luau_compiler
   luau_vm
-  stylua_ffi
+  rust_ffi
   brotli
   -Wl,--end-group
 )

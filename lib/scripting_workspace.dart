@@ -14,7 +14,7 @@ import 'package:rive_native/utilities.dart';
 /// been closed or is in the process of closing.
 class ScriptingWorkspaceClosedError extends StateError {
   ScriptingWorkspaceClosedError()
-      : super('Cannot request work on a closed ScriptingWorkspace');
+    : super('Cannot request work on a closed ScriptingWorkspace');
 }
 
 enum HighlightScope {
@@ -31,7 +31,7 @@ enum HighlightScope {
   boolean,
   nil,
   interpString,
-  function
+  function,
 }
 
 class HighlightScopeStyle {
@@ -49,10 +49,7 @@ class FormatOp {
 class FormatOpInsert extends FormatOp {
   final String text;
 
-  FormatOpInsert({
-    required super.position,
-    required this.text,
-  });
+  FormatOpInsert({required super.position, required this.text});
 }
 
 class FormatOpErase extends FormatOp {
@@ -200,6 +197,9 @@ enum ScriptProblemType {
 
   typeError,
   syntaxError,
+
+  wgslParseError,
+  wgslValidationError,
 }
 
 class ScriptProblemResult {
@@ -322,7 +322,10 @@ class AutocompleteEntry {
       matchedIndices[i] = reader.readVarUint();
     }
     return AutocompleteEntry(
-        range: range, text: text, matchedIndices: matchedIndices);
+      range: range,
+      text: text,
+      matchedIndices: matchedIndices,
+    );
   }
 }
 
@@ -428,10 +431,12 @@ class HighlightResult {
 
   const HighlightResult(this.type, {this.diffs = const []});
 
-  static const HighlightResult unknown =
-      HighlightResult(HighlightResultType.unknown);
-  static const HighlightResult computed =
-      HighlightResult(HighlightResultType.computed);
+  static const HighlightResult unknown = HighlightResult(
+    HighlightResultType.unknown,
+  );
+  static const HighlightResult computed = HighlightResult(
+    HighlightResultType.computed,
+  );
 
   static HighlightResult read(BinaryReader reader) {
     if (reader.isEOF) {
@@ -450,12 +455,14 @@ class HighlightResult {
       final destLineIndex = changeType == HighlightDiffChangeType.removed
           ? reader.readVarUint()
           : lineIndex;
-      diffs.add(HighlightDiffEntry(
-        changeType: changeType,
-        lineIndex: lineIndex,
-        lineCount: lineCount,
-        destLineIndex: destLineIndex,
-      ));
+      diffs.add(
+        HighlightDiffEntry(
+          changeType: changeType,
+          lineIndex: lineIndex,
+          lineCount: lineCount,
+          destLineIndex: destLineIndex,
+        ),
+      );
     }
     return HighlightResult(HighlightResultType.computed, diffs: diffs);
   }
@@ -463,15 +470,7 @@ class HighlightResult {
 
 enum InsertionCompletion { none, end, doEnd, until, thenEnd }
 
-enum PropertyType {
-  number,
-  string,
-  boolean,
-  color,
-  trigger,
-  artboard,
-  other,
-}
+enum PropertyType { number, string, boolean, color, trigger, artboard, other }
 
 class ImplementedTypeProperty {
   final PropertyType type;
@@ -585,12 +584,13 @@ class ImplementedType {
     }
 
     return ImplementedType(
-        scriptName: scriptName,
-        interfaceTypeName: interfaceName,
-        inputs: inputs,
-        outputs: outputs,
-        userTypeNames: userTypesNames,
-        dependencies: dependencies);
+      scriptName: scriptName,
+      interfaceTypeName: interfaceName,
+      inputs: inputs,
+      outputs: outputs,
+      userTypeNames: userTypesNames,
+      dependencies: dependencies,
+    );
   }
 }
 
@@ -646,10 +646,7 @@ class ScriptFindResults {
   final String scriptId;
   final List<FindInFilesMatch> matches;
 
-  ScriptFindResults({
-    required this.scriptId,
-    required this.matches,
-  });
+  ScriptFindResults({required this.scriptId, required this.matches});
 }
 
 class FindInFilesResult {
@@ -673,12 +670,14 @@ class FindInFilesResult {
         final beforeMatch = reader.readString();
         final matchText = reader.readString();
         final afterMatch = reader.readString();
-        matches.add(FindInFilesMatch(
-          line: line,
-          beforeMatch: beforeMatch,
-          matchText: matchText,
-          afterMatch: afterMatch,
-        ));
+        matches.add(
+          FindInFilesMatch(
+            line: line,
+            beforeMatch: beforeMatch,
+            matchText: matchText,
+            afterMatch: afterMatch,
+          ),
+        );
       }
 
       results.add(ScriptFindResults(scriptId: scriptId, matches: matches));
@@ -758,14 +757,16 @@ class VMResult {
       for (int j = 0; j < depCount; j++) {
         dependencies.add(reader.readString());
       }
-      modules.add(RegisteredModule(
-        scriptId: scriptId,
-        moduleName: moduleName,
-        isUtility: isUtility,
-        generatorRef: generatorRef,
-        error: error,
-        dependencies: dependencies,
-      ));
+      modules.add(
+        RegisteredModule(
+          scriptId: scriptId,
+          moduleName: moduleName,
+          isUtility: isUtility,
+          generatorRef: generatorRef,
+          error: error,
+          dependencies: dependencies,
+        ),
+      );
     }
 
     // Read timing data (in microseconds)
@@ -798,10 +799,11 @@ class CompileResult {
   final Iterable<CompiledModule> dependencies;
   final Iterable<String> dependents;
 
-  CompileResult(
-      {required this.bytecode,
-      this.dependencies = const Iterable.empty(),
-      this.dependents = const Iterable.empty()});
+  CompileResult({
+    required this.bytecode,
+    this.dependencies = const Iterable.empty(),
+    this.dependents = const Iterable.empty(),
+  });
 
   static CompileResult? read(BinaryReader reader) {
     if (reader.isEOF) {
@@ -840,7 +842,7 @@ enum OptimizationLevel {
   medium,
 
   /// includes optimizations that harm debuggability such as inlining
-  max
+  max,
 }
 
 enum DebugLevel {
@@ -851,22 +853,38 @@ enum DebugLevel {
   medium,
 
   /// full debug info with local & upvalue names; necessary for debugger
-  max
+  max,
 }
 
 /// A workspace represents a collection of files that are likely related
 /// (usually part of a single Rive file).
 abstract class ScriptingWorkspace {
   Future<HighlightResult> setSystemGeneratedSource(
-      String scriptName, String prefix, String source);
+    String scriptName,
+    String prefix,
+    String source,
+  );
 
   /// Set the [source] code for the script with [scriptId]. Calling this again
   /// with the same [scriptId] will overwrite the script. Set [highlight] to
   /// true if you'd like to have highlighting data computed. [scriptName] is the
   /// name used to require this script.
   Future<HighlightResult> setScriptSource(
-      String scriptId, String scriptName, String source,
-      {bool highlight = false});
+    String scriptId,
+    String scriptName,
+    String source, {
+    bool highlight = false,
+  });
+
+  /// Set a WGSL shader source. Same as [setScriptSource] but marks the script
+  /// as WGSL so the workspace uses naga for validation/highlighting/formatting
+  /// instead of Luau.
+  Future<HighlightResult> setWGSLScriptSource(
+    String scriptId,
+    String scriptName,
+    String source, {
+    bool highlight = false,
+  });
 
   /// Set the diff source for a module with [scriptId]. We store the diff source
   /// on the Script so subsequent calls to setScriptSource can return line
@@ -902,6 +920,7 @@ abstract class ScriptingWorkspace {
     bool failOnErrors = false,
     OptimizationLevel optimizationLevel = OptimizationLevel.medium,
     DebugLevel debugLevel = DebugLevel.medium,
+    int shaderOutputFlags = 0,
   });
 
   /// Searches for [query] in files. If [inclusionSet] is provided, only those
@@ -930,11 +949,15 @@ abstract class ScriptingWorkspace {
   /// Get possible autocompletion results at [position] in script with name
   /// [scriptName].
   Future<AutocompleteResult> autocomplete(
-      String scriptName, ScriptPosition position);
+    String scriptName,
+    ScriptPosition position,
+  );
 
   /// Get definition information at [position] in script with name [scriptName].
   Future<DefinitionResult> getDefinition(
-      String scriptName, ScriptPosition position);
+    String scriptName,
+    ScriptPosition position,
+  );
 
   /// Dispose of the workspace, any further calls will not work.
   @mustCallSuper
@@ -945,7 +968,9 @@ abstract class ScriptingWorkspace {
 
   /// Get extra text insertion to be auto-completed at the given position.
   Future<InsertionCompletion> completeInsertion(
-      String scriptName, ScriptPosition position);
+    String scriptName,
+    ScriptPosition position,
+  );
 
   /// Get a specific line from the diff source for a module with [scriptId].
   /// Returns the line content when ready, or empty string if the line doesn't
@@ -989,7 +1014,9 @@ abstract class ScriptingWorkspace {
 
   @protected
   void completeWork(
-      Completer completer, ScriptingWorkspaceResponseResult response) {
+    Completer completer,
+    ScriptingWorkspaceResponseResult response,
+  ) {
     assert(response.available);
     if (completer is Completer<List<ScriptProblemResult>>) {
       _completeFullProblemReport(completer, response);
@@ -1056,8 +1083,10 @@ abstract class ScriptingWorkspace {
     completer.complete(results);
   }
 
-  void _completeProblemReport(Completer<ScriptProblemResult> completer,
-      ScriptingWorkspaceResponseResult result) {
+  void _completeProblemReport(
+    Completer<ScriptProblemResult> completer,
+    ScriptingWorkspaceResponseResult result,
+  ) {
     final reader = result.reader;
     // Handle null reader OR empty buffer (work was cancelled).
     if (reader == null || reader.isEOF) {

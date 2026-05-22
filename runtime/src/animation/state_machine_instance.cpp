@@ -15,12 +15,15 @@
 #include "rive/animation/state_machine_input.hpp"
 #include "rive/animation/state_machine_instance.hpp"
 #include "rive/animation/state_machine_layer.hpp"
+#include "rive/animation/listener_invocation.hpp"
 #include "rive/animation/state_machine_listener.hpp"
+#include "rive/animation/state_machine_listener_single.hpp"
 #include "rive/animation/state_machine_number.hpp"
 #include "rive/animation/state_machine_trigger.hpp"
 #include "rive/animation/state_machine.hpp"
 #include "rive/animation/state_transition.hpp"
 #include "rive/animation/listener_action.hpp"
+#include "rive/animation/listener_types/listener_input_type_viewmodel.hpp"
 #include "rive/animation/scripted_listener_action.hpp"
 #include "rive/animation/transition_condition.hpp"
 #include "rive/animation/transition_comparator.hpp"
@@ -32,6 +35,8 @@
 #include "rive/constraints/draggable_constraint.hpp"
 #include "rive/data_bind/data_bind_context.hpp"
 #include "rive/data_bind/data_bind.hpp"
+#include "rive/data_bind/context/context_value.hpp"
+#include "rive/data_bind/data_values/data_value_number.hpp"
 #include "rive/data_bind_flags.hpp"
 #include "rive/event_report.hpp"
 #include "rive/hit_result.hpp"
@@ -51,12 +56,36 @@
 #include "rive/profiler/profiler_macros.h"
 #include "rive/text/text_input.hpp"
 #include "rive/refcnt.hpp"
+#include "rive/animation/focus_listener_group.hpp"
+#include "rive/animation/text_input_listener_group.hpp"
+#include "rive/animation/listener_types/listener_input_type_event.hpp"
+#include "rive/focus_data.hpp"
+#include "rive/node.hpp"
+#include <array>
+#include <memory>
 #include <unordered_map>
+#include <vector>
 #include <chrono>
+#include <cmath>
 
 using namespace rive;
 namespace rive
 {
+namespace
+{
+constexpr std::array<ListenerType, 9> kPointerHitListenerTypes = {
+    ListenerType::enter,
+    ListenerType::exit,
+    ListenerType::down,
+    ListenerType::up,
+    ListenerType::move,
+    ListenerType::click,
+    ListenerType::dragStart,
+    ListenerType::dragEnd,
+    ListenerType::drag,
+};
+} // namespace
+
 class StateMachineLayerInstance
 {
 public:
@@ -111,13 +140,18 @@ public:
     void updateMix(float seconds)
     {
         if (m_transition != nullptr && m_stateFrom != nullptr &&
-            m_transition->duration() != 0)
+            resolvedDuration() != 0)
         {
-            m_mix = std::min(
-                1.0f,
-                std::max(0.0f,
-                         (m_mix + seconds / m_transition->mixTime(
-                                                m_stateFrom->state()))));
+            auto mixTime = resolvedMixTime();
+            if (mixTime == 0.0f)
+            {
+                m_mix = 1.0f;
+            }
+            else
+            {
+                m_mix =
+                    std::min(1.0f, std::max(0.0f, (m_mix + seconds / mixTime)));
+            }
             if (m_mix == 1.0f && !m_transitionCompleted)
             {
                 m_transitionCompleted = true;
@@ -175,10 +209,48 @@ public:
                (m_currentState != nullptr && m_currentState->keepGoing());
     }
 
+    /// Returns the per-instance transition duration, resolving any data
+    /// binding override. Falls back to the shared definition value when
+    /// no binding exists.
+    uint32_t resolvedDuration() const
+    {
+        if (m_transitionDurationProperty != nullptr)
+        {
+            float val = m_transitionDurationProperty->propertyValue();
+            return val < 0 ? 0 : static_cast<uint32_t>(std::round(val));
+        }
+        return m_transition->duration();
+    }
+
+    /// Computes the mix time using the per-instance resolved duration.
+    float resolvedMixTime() const
+    {
+        auto dur = resolvedDuration();
+        if (dur == 0)
+        {
+            return 0;
+        }
+        if (m_transition->durationIsPercentage())
+        {
+            float animationDuration = 0.0f;
+            auto state = m_stateFrom->state();
+            if (state->is<AnimationState>())
+            {
+                auto animation = state->as<AnimationState>()->animation();
+                if (animation != nullptr)
+                {
+                    animationDuration = animation->durationSeconds();
+                }
+            }
+            return (float)dur / 100.0f * animationDuration;
+        }
+        return (float)dur / 1000.0f;
+    }
+
     bool isTransitioning()
     {
         return m_transition != nullptr && m_stateFrom != nullptr &&
-               m_transition->duration() != 0 && m_mix < 1.0f;
+               resolvedDuration() != 0 && m_mix < 1.0f;
     }
 
     bool updateState()
@@ -381,9 +453,13 @@ public:
             m_stateMachineChangedOnAdvance = true;
             // state actually has changed
             m_transition = transition;
+            m_transitionDurationProperty =
+                m_stateMachineInstance->findTransitionPropertyInstance(
+                    transition,
+                    StateTransitionBase::durationPropertyKey);
             fireEvents(StateMachineFireOccurance::atStart,
                        transition->events());
-            if (transition->duration() == 0)
+            if (resolvedDuration() == 0)
             {
                 m_transitionCompleted = true;
                 fireEvents(StateMachineFireOccurance::atEnd,
@@ -517,6 +593,7 @@ private:
     StateInstance* m_stateFrom = nullptr;
 
     const StateTransition* m_transition = nullptr;
+    BindablePropertyNumber* m_transitionDurationProperty = nullptr;
     std::unique_ptr<AnimationReset> m_animationReset = nullptr;
     bool m_transitionCompleted = false;
 
@@ -821,6 +898,9 @@ public:
                         case ListenerType::textInput:
                         case ListenerType::viewModel:
                         case ListenerType::drag:
+                        case ListenerType::focus:
+                        case ListenerType::blur:
+                        case ListenerType::keyboard:
                             break;
                     }
                 }
@@ -844,6 +924,9 @@ public:
                         case ListenerType::textInput:
                         case ListenerType::viewModel:
                         case ListenerType::drag:
+                        case ListenerType::focus:
+                        case ListenerType::blur:
+                        case ListenerType::keyboard:
                             break;
                     }
                 }
@@ -955,6 +1038,9 @@ public:
                         case ListenerType::textInput:
                         case ListenerType::viewModel:
                         case ListenerType::drag:
+                        case ListenerType::focus:
+                        case ListenerType::blur:
+                        case ListenerType::keyboard:
                             break;
                     }
                 }
@@ -977,6 +1063,9 @@ public:
                         case ListenerType::textInput:
                         case ListenerType::viewModel:
                         case ListenerType::drag:
+                        case ListenerType::focus:
+                        case ListenerType::blur:
+                        case ListenerType::keyboard:
                             break;
                     }
                 }
@@ -1002,52 +1091,221 @@ public:
     {}
 };
 
-class ListenerViewModel : public Dirtyable
+class ListenerViewModel;
+
+// Helper that holds one view model property reference, listens to its dirt,
+// and reports the parent ListenerViewModel when the property changes.
+class ListenerViewModelPropertyBinding : public ViewModelValueDependent
 {
 public:
-    virtual ~ListenerViewModel() = default;
+    ListenerViewModelPropertyBinding(ListenerViewModel* parent,
+                                     ViewModelInstanceValue* vmProp);
+    virtual ~ListenerViewModelPropertyBinding();
+    void addDirt(ComponentDirt value, bool recurse) override;
+    void relinkDataBind() override;
+
+protected:
+    ListenerViewModel* m_parent = nullptr;
+    rive::rcp<ViewModelInstanceValue> m_viewModelInstanceValue = nullptr;
+    void clearDataContext();
+};
+class ListenerViewModelPropertyBindingListener
+    : public ListenerViewModelPropertyBinding
+{
+public:
+    ListenerViewModelPropertyBindingListener(
+        ListenerViewModel* parent,
+        ViewModelInstanceValue* vmProp,
+        const StateMachineListenerSingle* listener);
+    void relinkDataBind() override;
+
+private:
+    const StateMachineListenerSingle* m_listener;
+};
+class ListenerViewModelPropertyBindingInput
+    : public ListenerViewModelPropertyBinding
+{
+public:
+    ListenerViewModelPropertyBindingInput(
+        ListenerViewModel* parent,
+        ViewModelInstanceValue* vmProp,
+        const ListenerInputTypeViewModel* listenerInput);
+    void relinkDataBind() override;
+
+private:
+    const ListenerInputTypeViewModel* m_listenerInput;
+};
+
+class ListenerViewModel
+{
+public:
+    virtual ~ListenerViewModel();
     ListenerViewModel(StateMachineInstance* smInstance,
                       const StateMachineListener* listener) :
         m_stateMachineInstance(smInstance), m_listener(listener)
     {}
-    void clearDataContext()
-    {
-        if (m_viewModelInstanceValue != nullptr)
-        {
-            m_viewModelInstanceValue->removeDependent(this);
-            m_viewModelInstanceValue = nullptr;
-        }
-    }
+
+    void clearDataContext() { m_propertyBindings.clear(); }
     void bindFromContext(rcp<DataContext> dataContext)
     {
+        m_dataContext = dataContext;
         clearDataContext();
-        auto vmProp =
-            dataContext->getViewModelProperty(m_listener->dataBindPath());
-        if (vmProp != nullptr)
+        if (m_listener->is<StateMachineListenerSingle>())
         {
-            m_viewModelInstanceValue = rive::ref_rcp(vmProp);
-            vmProp->addDependent(this);
-        }
-    }
-    void addDirt(ComponentDirt value, bool recurse)
-    {
-        if (m_viewModelInstanceValue)
-        {
-            if (!m_viewModelInstanceValue->is<ViewModelInstanceTrigger>() ||
-                m_viewModelInstanceValue->as<ViewModelInstanceTrigger>()
-                        ->propertyValue() != 0)
+            auto vmProp = dataContext->getViewModelProperty(
+                m_listener->as<StateMachineListenerSingle>()->dataBindPath());
+            if (vmProp != nullptr)
             {
-                m_stateMachineInstance->reportListenerViewModel(this);
+                m_propertyBindings.push_back(
+                    std::make_unique<ListenerViewModelPropertyBindingListener>(
+                        this,
+                        vmProp,
+                        m_listener->as<StateMachineListenerSingle>()));
+            }
+        }
+        else
+        {
+            size_t index = 0;
+            while (index < m_listener->listenerInputTypeCount())
+            {
+                auto listenerInputType = m_listener->listenerInputType(index);
+                if (listenerInputType->is<ListenerInputTypeViewModel>())
+                {
+                    auto listenerInputTypeVM =
+                        listenerInputType->as<ListenerInputTypeViewModel>();
+                    auto vmProp = dataContext->getViewModelProperty(
+                        listenerInputTypeVM->dataBindPath());
+                    if (vmProp != nullptr)
+                    {
+                        m_propertyBindings.push_back(
+                            std::make_unique<
+                                ListenerViewModelPropertyBindingInput>(
+                                this,
+                                vmProp,
+                                listenerInputTypeVM));
+                    }
+                }
+                index++;
             }
         }
     }
+    void reportToStateMachine(ViewModelInstanceValue* value)
+    {
+        if (!value->is<ViewModelInstanceTrigger>() ||
+            value->as<ViewModelInstanceTrigger>()->propertyValue() != 0)
+        {
+            m_stateMachineInstance->reportListenerViewModel(this);
+        }
+    }
     const StateMachineListener* listener() { return m_listener; }
+    DataContext* dataContext()
+    {
+        if (m_dataContext)
+        {
+
+            return m_dataContext.get();
+        }
+        return nullptr;
+    }
 
 private:
     StateMachineInstance* m_stateMachineInstance = nullptr;
     const StateMachineListener* m_listener = nullptr;
-    rive::rcp<ViewModelInstanceValue> m_viewModelInstanceValue = nullptr;
+    rcp<DataContext> m_dataContext = nullptr;
+    std::vector<std::unique_ptr<ListenerViewModelPropertyBinding>>
+        m_propertyBindings;
 };
+
+ListenerViewModelPropertyBinding::ListenerViewModelPropertyBinding(
+    ListenerViewModel* parent,
+    ViewModelInstanceValue* vmProp) :
+    m_parent(parent), m_viewModelInstanceValue(rive::ref_rcp(vmProp))
+{
+    vmProp->addDependent(this);
+}
+
+void ListenerViewModelPropertyBinding::relinkDataBind() {};
+
+ListenerViewModelPropertyBinding::~ListenerViewModelPropertyBinding()
+{
+    clearDataContext();
+}
+
+void ListenerViewModelPropertyBinding::clearDataContext()
+{
+
+    if (m_viewModelInstanceValue != nullptr)
+    {
+        m_viewModelInstanceValue->removeDependent(this);
+        m_viewModelInstanceValue = nullptr;
+    }
+}
+
+ListenerViewModelPropertyBindingListener::
+    ListenerViewModelPropertyBindingListener(
+        ListenerViewModel* parent,
+        ViewModelInstanceValue* vmProp,
+        const StateMachineListenerSingle* listener) :
+    ListenerViewModelPropertyBinding(parent, vmProp), m_listener(listener)
+{}
+
+void ListenerViewModelPropertyBindingListener::relinkDataBind()
+{
+    auto dataContext = m_parent->dataContext();
+    if (dataContext)
+    {
+
+        auto vmProp =
+            dataContext->getViewModelProperty(m_listener->dataBindPath());
+        if (vmProp != m_viewModelInstanceValue.get())
+        {
+            clearDataContext();
+            if (vmProp != nullptr)
+            {
+                m_viewModelInstanceValue = ref_rcp(vmProp);
+                vmProp->addDependent(this);
+            }
+        }
+    }
+}
+
+ListenerViewModelPropertyBindingInput::ListenerViewModelPropertyBindingInput(
+    ListenerViewModel* parent,
+    ViewModelInstanceValue* vmProp,
+    const ListenerInputTypeViewModel* listenerInput) :
+    ListenerViewModelPropertyBinding(parent, vmProp),
+    m_listenerInput(listenerInput)
+{}
+
+void ListenerViewModelPropertyBindingInput::relinkDataBind()
+{
+    auto dataContext = m_parent->dataContext();
+    if (dataContext)
+    {
+        auto vmProp =
+            dataContext->getViewModelProperty(m_listenerInput->dataBindPath());
+        if (vmProp != m_viewModelInstanceValue.get())
+        {
+            clearDataContext();
+            if (vmProp != nullptr)
+            {
+                m_viewModelInstanceValue = ref_rcp(vmProp);
+                vmProp->addDependent(this);
+            }
+        }
+    }
+}
+
+void ListenerViewModelPropertyBinding::addDirt(ComponentDirt value,
+                                               bool recurse)
+{
+    if (m_parent != nullptr && m_viewModelInstanceValue != nullptr)
+    {
+        m_parent->reportToStateMachine(m_viewModelInstanceValue.get());
+    }
+}
+
+ListenerViewModel::~ListenerViewModel() { clearDataContext(); }
 
 } // namespace rive
 
@@ -1190,9 +1448,9 @@ void StateMachineInstance::addToHitLookup(
         auto itr = hitLookup.find(target);
         if (itr == hitLookup.end())
         {
-            auto hs = rivestd::make_unique<HitLayout>(target->as<Drawable>(),
-                                                      this,
-                                                      isOpaque);
+            auto hs = std::make_unique<HitLayout>(target->as<Drawable>(),
+                                                  this,
+                                                  isOpaque);
             hitLookup[target] = hitLayout = hs.get();
             m_hitComponents.push_back(std::move(hs));
         }
@@ -1217,7 +1475,7 @@ void StateMachineInstance::addToHitLookup(
             Shape* shape = target->as<Shape>();
             shape->addFlags(PathFlags::neverDeferUpdate);
             shape->addDirt(ComponentDirt::Path, true);
-            auto hs = rivestd::make_unique<HitExpandable>(shape, shape, this);
+            auto hs = std::make_unique<HitExpandable>(shape, shape, this);
             hitLookup[target] = hitShape = hs.get();
             m_hitComponents.push_back(std::move(hs));
         }
@@ -1237,9 +1495,8 @@ void StateMachineInstance::addToHitLookup(
         {
             TextValueRun* run = target->as<TextValueRun>();
             run->textComponent()->addDirt(ComponentDirt::Path, true);
-            auto hs = rivestd::make_unique<HitTextRun>(run->textComponent(),
-                                                       run,
-                                                       this);
+            auto hs =
+                std::make_unique<HitTextRun>(run->textComponent(), run, this);
             hitLookup[target] = hitTextRun = hs.get();
             m_hitComponents.push_back(std::move(hs));
         }
@@ -1362,7 +1619,22 @@ StateMachineInstance::StateMachineInstance(const StateMachine* machine,
         }
         else
         {
-            dataBindClone->target(dataBind->target());
+            auto* originalTarget = dataBind->target();
+            dataBindClone->target(originalTarget);
+            if (originalTarget->is<StateTransitionBase>())
+            {
+                // Create a per-instance BindablePropertyNumber to
+                // receive the data-bound value instead of writing
+                // to the shared StateTransition. Swap the target
+                // and propertyKey so the normal apply() path writes
+                // to our instance-local property.
+                auto* prop = new BindablePropertyNumber();
+                m_transitionPropertyInstances[originalTarget]
+                                             [dataBind->propertyKey()] = prop;
+                dataBindClone->target(prop);
+                dataBindClone->propertyKey(
+                    BindablePropertyNumberBase::propertyValuePropertyKey);
+            }
         }
     }
 
@@ -1373,33 +1645,94 @@ StateMachineInstance::StateMachineInstance(const StateMachine* machine,
     for (std::size_t i = 0; i < machine->listenerCount(); i++)
     {
         auto listener = machine->listener(i);
-        if (listener->listenerType() == ListenerType::event)
+        if (listener->hasListener(ListenerType::event))
         {
             continue;
         }
-        if (listener->listenerType() == ListenerType::viewModel)
+        if (listener->hasListener(ListenerType::viewModel))
         {
             auto vmListener = new ListenerViewModel(this, listener);
             m_listenerViewModels.push_back(vmListener);
             continue;
         }
-        auto listenerGroup = rivestd::make_unique<ListenerGroup>(listener);
-        auto target = m_artboardInstance->resolve(listener->targetId());
-        if (target != nullptr && target->is<Component>())
+        // Handle focus/blur listeners - they're driven by FocusManager,
+        // not pointer events.
+        if (listener->hasListener(ListenerType::focus) ||
+            listener->hasListener(ListenerType::blur))
         {
-            bool isLayoutComponent = false;
-            if (target->is<LayoutComponent>())
+            auto target = m_artboardInstance->resolve(listener->targetId());
+            if (target != nullptr && target->is<Node>())
             {
-                isLayoutComponent = true;
-                target = target->as<LayoutComponent>()->proxy();
+                auto node = target->as<Node>();
+                // Find FocusData child of the node
+                FocusData* focusData = nullptr;
+                for (auto child : node->children())
+                {
+                    if (child->is<FocusData>())
+                    {
+                        focusData = child->as<FocusData>();
+                        break;
+                    }
+                }
+                if (focusData != nullptr)
+                {
+                    auto focusGroup =
+                        std::make_unique<FocusListenerGroup>(focusData,
+                                                             listener,
+                                                             this);
+                    m_focusListenerGroups.push_back(std::move(focusGroup));
+                }
             }
-            addToHitLookup(target->as<Component>(),
-                           isLayoutComponent,
-                           hitLookup,
-                           listenerGroup.get(),
-                           false);
         }
-        m_listenerGroups.push_back(std::move(listenerGroup));
+        if (listener->hasListener(ListenerType::keyboard) ||
+            listener->hasListener(ListenerType::textInput))
+        {
+            auto target = m_artboardInstance->resolve(listener->targetId());
+            if (target != nullptr && target->is<Node>())
+            {
+                auto node = target->as<Node>();
+                // Find FocusData child of the node
+                FocusData* focusData = nullptr;
+                for (auto child : node->children())
+                {
+                    if (child->is<FocusData>())
+                    {
+                        focusData = child->as<FocusData>();
+                        break;
+                    }
+                }
+                if (focusData != nullptr)
+                {
+                    auto keyboardGroup =
+                        std::make_unique<KeyboardListenerGroup>(focusData,
+                                                                listener,
+                                                                this);
+                    m_keyboardListenerGroups.push_back(
+                        std::move(keyboardGroup));
+                }
+            }
+        }
+
+        if (listener->hasListeners(kPointerHitListenerTypes))
+        {
+            auto listenerGroup = std::make_unique<ListenerGroup>(listener);
+            auto target = m_artboardInstance->resolve(listener->targetId());
+            if (target != nullptr && target->is<Component>())
+            {
+                bool isLayoutComponent = false;
+                if (target->is<LayoutComponent>())
+                {
+                    isLayoutComponent = true;
+                    target = target->as<LayoutComponent>()->proxy();
+                }
+                addToHitLookup(target->as<Component>(),
+                               isLayoutComponent,
+                               hitLookup,
+                               listenerGroup.get(),
+                               false);
+            }
+            m_listenerGroups.push_back(std::move(listenerGroup));
+        }
     }
 
     std::vector<ListenerGroupProvider*> componentProvidedListenerGroups;
@@ -1454,9 +1787,9 @@ StateMachineInstance::StateMachineInstance(const StateMachine* machine,
         // TODO: @hernan as an optimization only create a HitNestedArtboard if
         // the nested artboard has state machines or if it is bound via data
         // binding
-        auto hn = rivestd::make_unique<HitNestedArtboard>(
-            nestedArtboard->as<Component>(),
-            this);
+        auto hn =
+            std::make_unique<HitNestedArtboard>(nestedArtboard->as<Component>(),
+                                                this);
         m_hitComponents.push_back(std::move(hn));
         for (auto animation : nestedArtboard->nestedAnimations())
         {
@@ -1482,11 +1815,28 @@ StateMachineInstance::StateMachineInstance(const StateMachine* machine,
     }
     for (auto componentList : instance->artboardComponentLists())
     {
-        auto hc = rivestd::make_unique<HitComponentList>(
-            componentList->as<Component>(),
-            this);
+        auto hc =
+            std::make_unique<HitComponentList>(componentList->as<Component>(),
+                                               this);
         m_hitComponents.push_back(std::move(hc));
     }
+
+#ifdef WITH_RIVE_TEXT
+    // Register TextInputs as hit targets for drag-to-select functionality
+    for (auto textInput : instance->objects<TextInput>())
+    {
+        auto textInputGroup =
+            std::make_unique<TextInputListenerGroup>(textInput, this);
+        auto hitExpandable = std::make_unique<HitExpandable>(
+            textInput->as<Drawable>(),
+            textInput->as<Component>(),
+            this,
+            true); // isOpaque - TextInput blocks hits behind it
+        hitExpandable->addListener(textInputGroup.get());
+        m_hitComponents.push_back(std::move(hitExpandable));
+        m_listenerGroups.push_back(std::move(textInputGroup));
+    }
+#endif
 
     // Initialize local instances of ScriptedObjects
     for (auto& scriptedOb : machine->scriptedObjects())
@@ -1494,7 +1844,37 @@ StateMachineInstance::StateMachineInstance(const StateMachine* machine,
         m_scriptedObjectsMap[scriptedOb] =
             scriptedOb->cloneScriptedObject(this);
     }
+    // Register Scripted objects as keyboard and text targets when expected
+    for (auto object : instance->objects<ContainerComponent>())
+    {
+        auto scriptedObject = ScriptedObject::from(object);
+        if (scriptedObject && (scriptedObject->wantsKeyboardInput() ||
+                               scriptedObject->wantsTextInput()))
+        {
+            for (auto& child : object->as<ContainerComponent>()->children())
+            {
+                if (child->is<FocusData>())
+                {
+
+                    auto keyboardGroup =
+                        std::make_unique<KeyboardListenerGroup>(
+                            child->as<FocusData>(),
+                            nullptr,
+                            this);
+                    m_keyboardListenerGroups.push_back(
+                        std::move(keyboardGroup));
+                    break;
+                }
+            }
+        }
+    }
     sortHitComponents();
+
+    // Build the focus tree for this artboard. focusManager() returns the
+    // external manager if set (e.g., when Dart owns the manager at edit time),
+    // otherwise the internal one. For nested artboards that need a parent
+    // FocusNode, Dart should call buildFocusTreeWithParent() after init.
+    m_artboardInstance->buildFocusTree(focusManager(), nullptr);
 }
 
 ScriptedObject* StateMachineInstance::scriptedObject(
@@ -1510,6 +1890,14 @@ ScriptedObject* StateMachineInstance::scriptedObject(
 
 StateMachineInstance::~StateMachineInstance()
 {
+    // Clean up focus tree BEFORE the internal FocusManager is destroyed.
+    // The artboard stores a raw pointer to our m_focusManager, so we must
+    // clear it before m_focusManager's implicit destruction at end of dtor.
+    if (m_externalFocusManager == nullptr && m_artboardInstance != nullptr)
+    {
+        m_artboardInstance->cleanupFocusTree();
+    }
+
     unbind();
     for (auto inst : m_inputInstances)
     {
@@ -1526,6 +1914,14 @@ StateMachineInstance::~StateMachineInstance()
         delete pair.second;
         pair.second = nullptr;
     }
+    for (auto& outer : m_transitionPropertyInstances)
+    {
+        for (auto& inner : outer.second)
+        {
+            delete inner.second;
+        }
+    }
+    m_transitionPropertyInstances.clear();
     for (auto& listenerViewModel : m_listenerViewModels)
     {
         delete listenerViewModel;
@@ -1538,6 +1934,13 @@ StateMachineInstance::~StateMachineInstance()
     }
     m_scriptedObjectsMap.clear();
 }
+
+// When a state machine instanced by a higher level runtime is destroyed, we
+// need to clean up all its references from the nested artboard children. The
+// reason is that the artboard might still be kept alive and it might have
+// invalid pointers. This is not necessary for nested state machines because
+// they are destroyed altogether.
+void StateMachineInstance::dispose() { removeEventListeners(); }
 
 void StateMachineInstance::removeEventListeners()
 {
@@ -1677,6 +2080,77 @@ void StateMachineInstance::applyEvents()
     }
 }
 
+void StateMachineInstance::setExternalFocusManager(FocusManager* manager)
+{
+    if (m_externalFocusManager == manager)
+    {
+        return;
+    }
+
+    // Clean up old focus tree if one was built
+    if (m_artboardInstance != nullptr &&
+        m_artboardInstance->focusManager() != nullptr)
+    {
+        m_artboardInstance->cleanupFocusTree();
+    }
+
+    m_externalFocusManager = manager;
+
+    // Rebuild focus tree with new manager (focusManager() will return the new
+    // external manager if set, or internal if null)
+    if (m_artboardInstance != nullptr)
+    {
+        m_artboardInstance->buildFocusTree(focusManager(), nullptr);
+    }
+}
+
+void StateMachineInstance::queueFocusEvent(FocusListenerGroup* group,
+                                           bool isFocus)
+{
+    m_queuedFocusEvents.push_back({group, isFocus});
+    m_needsAdvance = true;
+}
+
+void StateMachineInstance::setFocus(FocusData* focusData)
+{
+    if (focusData != nullptr)
+    {
+        auto node = focusData->focusNode();
+        auto* fm = focusManager();
+        fm->setFocus(node);
+    }
+    else
+    {
+        focusManager()->clearFocus();
+    }
+}
+
+void StateMachineInstance::processFocusEvents()
+{
+    if (m_queuedFocusEvents.empty())
+    {
+        return;
+    }
+
+    auto events = std::move(m_queuedFocusEvents);
+    m_queuedFocusEvents.clear();
+
+    for (const auto& event : events)
+    {
+        auto listener = event.group->listener();
+        bool isFocusEvent = event.isFocus;
+
+        // Match listener type to event type
+        if ((isFocusEvent && listener->hasListener(ListenerType::focus)) ||
+            (!isFocusEvent && listener->hasListener(ListenerType::blur)))
+        {
+            listener->performChanges(
+                this,
+                ListenerInvocation::focus(event.group, event.isFocus));
+        }
+    }
+}
+
 bool StateMachineInstance::advance(float seconds, bool newFrame)
 {
     if (m_drawOrderChangeCounter !=
@@ -1687,6 +2161,7 @@ bool StateMachineInstance::advance(float seconds, bool newFrame)
     }
     if (newFrame)
     {
+        processFocusEvents();
         applyEvents();
         m_needsAdvance = false;
     }
@@ -1732,6 +2207,7 @@ bool StateMachineInstance::advanceAndApply(float seconds)
     // Advancing by 0 could return false, when it shouldn't. Force keepGoing
     // to true.
     bool keepGoing = this->advance(seconds, true) || seconds == 0.0f;
+    focusManager()->dropFocusIfFocusTargetHidden();
     if (m_artboardInstance->advanceInternal(
             seconds,
             AdvanceFlags::IsRoot | AdvanceFlags::Animate |
@@ -1896,6 +2372,19 @@ void StateMachineInstance::clearDataContext()
     }
 }
 
+void StateMachineInstance::relinkDataContext()
+{
+    m_artboardInstance->relinkDataContext();
+}
+
+void StateMachineInstance::rebuildDataBind(DataBind* dataBind)
+{
+    if (dataBind->is<DataBindContext>())
+    {
+        dataBind->as<DataBindContext>()->bindFromContext(m_DataContext.get());
+    }
+};
+
 void StateMachineInstance::unbind()
 {
     clearDataContext();
@@ -2002,10 +2491,9 @@ void StateMachineInstance::notifyListenerViewModels(
     {
         for (auto& listenerViewModel : events)
         {
-            listenerViewModel->listener()->performChanges(this,
-                                                          Vec2D(),
-                                                          Vec2D(),
-                                                          0);
+            listenerViewModel->listener()->performChanges(
+                this,
+                ListenerInvocation::viewModelChange(listenerViewModel));
         }
     }
 }
@@ -2022,7 +2510,7 @@ void StateMachineInstance::notifyEventListeners(
             auto listener = m_machine->listener(i);
             auto target = artboard()->resolve(listener->targetId());
             if (listener != nullptr &&
-                listener->listenerType() == ListenerType::event &&
+                listener->hasListener(ListenerType::event) &&
                 (source == nullptr || source == target))
             {
                 for (const auto event : events)
@@ -2057,12 +2545,48 @@ void StateMachineInstance::notifyEventListeners(
                             continue;
                         }
                     }
-                    auto listenerEvent =
-                        sourceArtboard->resolve(listener->eventId());
-                    if (listenerEvent == event.event())
+                    if (listener->is<StateMachineListenerSingle>())
                     {
-                        listener->performChanges(this, Vec2D(), Vec2D(), 0);
-                        break;
+                        auto listenerEvent = sourceArtboard->resolve(
+                            listener->as<StateMachineListenerSingle>()
+                                ->eventId());
+                        if (listenerEvent == event.event())
+                        {
+                            listener->performChanges(
+                                this,
+                                ListenerInvocation::reportedEvent(
+                                    event.event(),
+                                    event.secondsDelay()));
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        size_t index = 0;
+                        while (index < listener->listenerInputTypeCount())
+                        {
+                            auto listenerInputType =
+                                listener->listenerInputType(index);
+                            if (listenerInputType->is<ListenerInputTypeEvent>())
+                            {
+
+                                auto listenerInputTypeEvent =
+                                    listenerInputType
+                                        ->as<ListenerInputTypeEvent>();
+                                auto listenerEvent = sourceArtboard->resolve(
+                                    listenerInputTypeEvent->eventId());
+                                if (listenerEvent == event.event())
+                                {
+                                    listener->performChanges(
+                                        this,
+                                        ListenerInvocation::reportedEvent(
+                                            event.event(),
+                                            event.secondsDelay()));
+                                    break;
+                                }
+                            }
+                            index += 1;
+                        }
                     }
                 }
             }
@@ -2135,25 +2659,18 @@ DataBind* StateMachineInstance::bindableDataBindToTarget(
     return dataBind->second;
 }
 
-bool StateMachineInstance::keyInput(Key value,
-                                    KeyModifiers modifiers,
-                                    bool isPressed,
-                                    bool isRepeat)
+BindablePropertyNumber* StateMachineInstance::findTransitionPropertyInstance(
+    const StateTransition* transition,
+    uint32_t propertyKey) const
 {
-    // For now just find a text input.
-    auto textInput = m_artboardInstance->objects<TextInput>().first();
-    if (textInput != nullptr)
+    auto it = m_transitionPropertyInstances.find(transition);
+    if (it != m_transitionPropertyInstances.end())
     {
-        return textInput->keyInput(value, modifiers, isPressed, isRepeat);
+        auto propIt = it->second.find(propertyKey);
+        if (propIt != it->second.end())
+        {
+            return propIt->second;
+        }
     }
-    return false;
-}
-bool StateMachineInstance::textInput(const std::string& text)
-{
-    auto textInput = m_artboardInstance->objects<TextInput>().first();
-    if (textInput != nullptr)
-    {
-        return textInput->textInput(text);
-    }
-    return false;
+    return nullptr;
 }

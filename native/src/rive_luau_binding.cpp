@@ -20,6 +20,7 @@ const rive::RawPath& renderPathToRawPath(rive::Factory* factory,
 #include <emscripten/html5.h>
 #endif
 
+#include <string>
 #include <vector>
 #include <chrono>
 #include <cstring>
@@ -708,6 +709,147 @@ EXPORT ScriptedPointerEvent* riveLuaPushPointerEvent(lua_State* state,
                                                      float y)
 {
     return lua_newrive<ScriptedPointerEvent>(state, id, Vec2D(x, y));
+}
+
+EXPORT ScriptedInvocation* riveLuaPushPointerListenerInvocation(
+    lua_State* state,
+    uint8_t id,
+    float x,
+    float y,
+    float prevX,
+    float prevY,
+    int hitType,
+    float timeStamp)
+{
+    auto p = ListenerInvocation::pointer(Vec2D(x, y),
+                                         Vec2D(prevX, prevY),
+                                         id,
+                                         (ListenerType)(hitType),
+                                         timeStamp);
+    return lua_newrive<ScriptedInvocation>(state, p);
+}
+
+EXPORT ScriptedInvocation* riveLuaPushKeyboardListenerInvocation(
+    lua_State* state,
+    uint32_t key,
+    uint8_t modifiers,
+    uint8_t isPressed,
+    uint8_t isRepeat)
+{
+    if (state == nullptr)
+    {
+        return nullptr;
+    }
+    auto k = ListenerInvocation::keyboard(static_cast<Key>(key),
+                                          static_cast<KeyModifiers>(modifiers),
+                                          isPressed != 0,
+                                          isRepeat != 0);
+    return lua_newrive<ScriptedInvocation>(state, k);
+}
+
+/// Scripted node `keyboardEvent` callback (KeyboardInvocation userdata), not
+/// listener ScriptedInvocation.
+EXPORT ScriptedKeyboardInvocation* riveLuaPushScriptedKeyboardInvocation(
+    lua_State* state,
+    uint32_t key,
+    uint8_t modifiers,
+    uint8_t isPressed,
+    uint8_t isRepeat)
+{
+    if (state == nullptr)
+    {
+        return nullptr;
+    }
+    return lua_newrive<ScriptedKeyboardInvocation>(
+        state,
+        static_cast<Key>(key),
+        static_cast<KeyModifiers>(modifiers),
+        isPressed != 0,
+        isRepeat != 0);
+}
+
+/// Scripted node `textEvent` callback (TextInputInvocation userdata).
+EXPORT ScriptedTextInputInvocation* riveLuaPushScriptedTextInputInvocation(
+    lua_State* state,
+    const char* utf8Text)
+{
+    if (state == nullptr)
+    {
+        return nullptr;
+    }
+    return lua_newrive<ScriptedTextInputInvocation>(
+        state,
+        std::string(utf8Text ? utf8Text : ""));
+}
+
+EXPORT ScriptedInvocation* riveLuaPushTextInputListenerInvocation(
+    lua_State* state,
+    const char* utf8Text)
+{
+    if (state == nullptr)
+    {
+        return nullptr;
+    }
+    auto t = ListenerInvocation::textInput(utf8Text ? utf8Text : "");
+    return lua_newrive<ScriptedInvocation>(state, std::move(t));
+}
+
+EXPORT ScriptedInvocation* riveLuaPushFocusListenerInvocation(lua_State* state,
+                                                              uint8_t isFocus)
+{
+    if (state == nullptr)
+    {
+        return nullptr;
+    }
+    auto f = ListenerInvocation::focus(nullptr, isFocus != 0);
+    return lua_newrive<ScriptedInvocation>(state, f);
+}
+
+EXPORT ScriptedInvocation* riveLuaPushReportedEventListenerInvocation(
+    lua_State* state,
+    float delaySeconds)
+{
+    if (state == nullptr)
+    {
+        return nullptr;
+    }
+    auto e = ListenerInvocation::reportedEvent(nullptr, delaySeconds);
+    return lua_newrive<ScriptedInvocation>(state, e);
+}
+
+EXPORT ScriptedInvocation* riveLuaPushViewModelChangeListenerInvocation(
+    lua_State* state)
+{
+    if (state == nullptr)
+    {
+        return nullptr;
+    }
+    auto v = ListenerInvocation::viewModelChange(nullptr);
+    return lua_newrive<ScriptedInvocation>(state, v);
+}
+
+EXPORT ScriptedInvocation* riveLuaPushNoneListenerInvocation(lua_State* state)
+{
+    if (state == nullptr)
+    {
+        return nullptr;
+    }
+    auto n = ListenerInvocation::none();
+    return lua_newrive<ScriptedInvocation>(state, n);
+}
+
+EXPORT ScriptedInvocation* riveLuaPushGamepadListenerInvocation(
+    lua_State* state,
+    int32_t deviceId,
+    uint64_t buttonMask,
+    float axis0)
+{
+    if (state == nullptr)
+    {
+        return nullptr;
+    }
+    auto g = ListenerInvocation::gamepad(deviceId, buttonMask, axis0);
+    return lua_newrive<ScriptedInvocation>(state, g);
 }
 
 EXPORT uint8_t riveLuaPointerEventHitResult(ScriptedPointerEvent* pointerEvent)

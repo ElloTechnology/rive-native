@@ -22,6 +22,16 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
     const bool fixedFunctionColorOutput =
         shaderMiscFlags & gpu::ShaderMiscFlags::fixedFunctionColorOutput;
 
+    if (type == Type::fragment && interlockMode == InterlockMode::msaa &&
+        drawType != DrawType::renderPassInitialize &&
+        drawType != DrawType::renderPassResolve)
+    {
+        // Fixed function color output and advanced blend are mutually exclusive
+        // and one of them should always be set in msaa mode.
+        assert(fixedFunctionColorOutput !=
+               bool(shaderFeatures & ShaderFeatures::ENABLE_ADVANCED_BLEND));
+    }
+
     Span<const uint32_t> vertCode;
     Span<const uint32_t> fragCode;
 
@@ -221,42 +231,79 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
 
         case gpu::InterlockMode::clockwiseAtomic:
         {
+            // Since advanced blend is done via input attachments in
+            // clockwiseAtomic mode, we can swap out the "_fixedcolor" shader
+            // variants on a per-draw basis instead of per render pass.
+            const bool drawUsesAdvancedBlend =
+                shaderFeatures & gpu::ShaderFeatures::ENABLE_ADVANCED_BLEND;
             switch (drawType)
             {
                 case DrawType::midpointFanPatches:
                 case DrawType::midpointFanCenterAAPatches:
                 case DrawType::outerCurvePatches:
                     vertCode = spirv::draw_clockwise_atomic_path_vert;
-                    fragCode =
-                        (shaderMiscFlags &
-                         gpu::ShaderMiscFlags::borrowedCoveragePass)
-                            ? spirv::
-                                  draw_clockwise_atomic_path_borrowed_coverage_frag
-                            : spirv::draw_clockwise_atomic_path_frag;
+                    if (shaderMiscFlags &
+                        gpu::ShaderMiscFlags::borrowedCoveragePass)
+                    {
+                        assert(!drawUsesAdvancedBlend);
+                        fragCode = spirv::
+                            draw_clockwise_atomic_path_borrowed_coverage_frag;
+                    }
+                    else if (!drawUsesAdvancedBlend)
+                    {
+
+                        fragCode =
+                            spirv::draw_clockwise_atomic_path_fixedcolor_frag;
+                    }
+                    else
+                    {
+                        fragCode = spirv::draw_clockwise_atomic_path_frag;
+                    }
                     break;
 
                 case DrawType::interiorTriangulation:
                     vertCode =
                         spirv::draw_clockwise_atomic_interior_triangles_vert;
-                    fragCode =
-                        (shaderMiscFlags &
-                         gpu::ShaderMiscFlags::borrowedCoveragePass)
-                            ? spirv::
-                                  draw_clockwise_atomic_interior_triangles_borrowed_coverage_frag
-                            : spirv::
-                                  draw_clockwise_atomic_interior_triangles_frag;
+                    if (shaderMiscFlags &
+                        gpu::ShaderMiscFlags::borrowedCoveragePass)
+                    {
+                        assert(!drawUsesAdvancedBlend);
+                        fragCode = spirv::
+                            draw_clockwise_atomic_interior_triangles_borrowed_coverage_frag;
+                    }
+                    else if (!drawUsesAdvancedBlend)
+                    {
+                        fragCode = spirv::
+                            draw_clockwise_atomic_interior_triangles_fixedcolor_frag;
+                    }
+                    else
+                    {
+                        fragCode = spirv::
+                            draw_clockwise_atomic_interior_triangles_frag;
+                    }
                     break;
 
                 case DrawType::atlasBlit:
                     vertCode = spirv::draw_clockwise_atomic_atlas_blit_vert;
                     fragCode =
-                        spirv::draw_clockwise_atomic_atlas_blit_fixedcolor_frag;
+                        !drawUsesAdvancedBlend
+                            ? spirv::
+                                  draw_clockwise_atomic_atlas_blit_fixedcolor_frag
+                            : spirv::draw_clockwise_atomic_atlas_blit_frag;
                     break;
 
                 case DrawType::imageMesh:
                     vertCode = spirv::draw_clockwise_atomic_image_mesh_vert;
                     fragCode =
-                        spirv::draw_clockwise_atomic_image_mesh_fixedcolor_frag;
+                        !drawUsesAdvancedBlend
+                            ? spirv::
+                                  draw_clockwise_atomic_image_mesh_fixedcolor_frag
+                            : spirv::draw_clockwise_atomic_image_mesh_frag;
+                    break;
+
+                case DrawType::renderPassInitialize:
+                    vertCode = spirv::draw_fullscreen_quad_vert;
+                    fragCode = spirv::draw_input_attachment_frag;
                     break;
 
                 case DrawType::imageRect:
@@ -269,7 +316,6 @@ DrawShaderVulkan::DrawShaderVulkan(Type type,
                 case DrawType::msaaOuterCubics:
                 case DrawType::msaaStencilClipReset:
                 case DrawType::renderPassResolve:
-                case DrawType::renderPassInitialize:
                     RIVE_UNREACHABLE();
             }
             break;

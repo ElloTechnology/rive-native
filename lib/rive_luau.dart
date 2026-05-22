@@ -315,6 +315,23 @@ abstract class LuauState {
   ScriptedPath pathAt(int index);
 
   PointerEvent pushPointerEvent(int id, Vec2D position);
+  void pushPointerListenerInvocation(int id, Vec2D position,
+      Vec2D previousPosition, int listenerType, double timeStamp);
+  void pushKeyboardListenerInvocation(
+      int key, int modifiers, bool isPressed, bool isRepeat);
+  /// Node script `keyboardEvent` (KeyboardInvocation userdata), not listener
+  /// [ScriptedInvocation].
+  void pushScriptedKeyboardInvocation(
+      int key, int modifiers, bool isPressed, bool isRepeat);
+  void pushTextInputListenerInvocation(String text);
+  /// Node script `textEvent` (TextInputInvocation userdata).
+  void pushScriptedTextInputInvocation(String text);
+  void pushFocusListenerInvocation(bool isFocus);
+  void pushReportedEventListenerInvocation(double delaySeconds);
+  void pushViewModelChangeListenerInvocation();
+  void pushNoneListenerInvocation();
+  void pushGamepadListenerInvocation(
+      int deviceId, int buttonMask, double axis0);
   RenderPath? renderPath(ScriptedPath path, RenderPath renderPath);
 
   /// Sets the execution timeout in milliseconds.

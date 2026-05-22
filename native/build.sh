@@ -126,23 +126,47 @@ if [[ $FLUTTER_RUNTIME = "" ]]; then
     #   rustup target add x86_64-apple-darwin
     #   rustup target add wasm32-unknown-emscripten
     #   rustup component add rust-src --toolchain nightly-2025-02-10-aarch64-apple-darwin
+    # Regenerate C headers from Rust source if needed.
+    # (Headers are committed; only regenerate when the Rust API changes.)
     pushd "../../scripting_workspace/formatter"
     if [[ ! -f stylua.h ]]; then
         cbindgen --config cbindgen.toml --output stylua.h
     fi
+    popd
+    pushd "../../scripting_workspace/naga_ffi"
+    if [[ ! -f naga_ffi.h ]]; then
+        cbindgen --config cbindgen.toml --output naga_ffi.h
+    fi
+    popd
+    pushd "../../scripting_workspace/wgsl_analyzer_ffi"
+    if [[ ! -f wgsl_analyzer_ffi.h ]]; then
+        cbindgen --config cbindgen.toml --output wgsl_analyzer_ffi.h
+    fi
+    popd
+    pushd "../../scripting_workspace/wgsl_formatter_ffi"
+    if [[ ! -f wgsl_formatter_ffi.h ]]; then
+        cbindgen --config cbindgen.toml --output wgsl_formatter_ffi.h
+    fi
+    popd
+
+    # Build the combined rust_ffi crate (stylua + naga + wgsl_analyzer on
+    # desktop) in one staticlib, sharing a single Rust runtime to avoid
+    # duplicate symbol errors.
+    pushd "../../scripting_workspace/rust_ffi"
     function build_rust_lib() {
         if [[ $OS = "wasm" ]] && [[ $WASM_SINGLE_THREADED = "" ]]; then
             RUSTFLAGS="--emit=llvm-ir -C target-feature=+atomics,+bulk-memory,+mutable-globals" cargo +nightly-2025-02-10 build --target $1 --profile minimize_web_threaded -Z build-std=std,panic_abort
         elif [[ $OS = "wasm" ]]; then
             RUSTFLAGS="--emit=llvm-ir -C target-feature=+atomics,+bulk-memory,+mutable-globals" cargo +nightly-2025-02-10 build --target $1 --profile minimize_web -Z build-std=std,panic_abort
         else
+            # Desktop (macOS / Linux / Windows): enable wgsl_ide for
+            # multi-error diagnostics, completions, and hover.
             if [[ $1 = "" ]]; then
-                RUSTFLAGS="--emit=llvm-ir" cargo build --profile minimize
+                RUSTFLAGS="--emit=llvm-ir" cargo build --profile minimize --features wgsl_ide
             else
-                RUSTFLAGS="--emit=llvm-ir" cargo build --target $1 --profile minimize
+                RUSTFLAGS="--emit=llvm-ir" cargo build --target $1 --profile minimize --features wgsl_ide
             fi
         fi
-
     }
 
     if [[ $OS = "wasm" ]]; then
@@ -153,6 +177,7 @@ if [[ $FLUTTER_RUNTIME = "" ]]; then
         build_rust_lib wasm32-unknown-emscripten
         export EMCC_CFLAGS=""
     elif [[ $OS = "macosx" ]]; then
+        rustup target add x86_64-apple-darwin 2>/dev/null || true
         build_rust_lib aarch64-apple-darwin
         build_rust_lib x86_64-apple-darwin
     elif [[ $machine = "windows" ]]; then
@@ -276,9 +301,9 @@ elif [[ $machine = "linux" ]]; then
         mkdir -p $COPY_TO
         if [[ $FLUTTER_RUNTIME = "" ]]; then
             if [[ $LINUX_ARCH == "arm64" ]]; then
-                cp ../../scripting_workspace/formatter/target/aarch64-unknown-linux-gnu/minimize/libstylua_ffi.a $(out_dir linux arm64)
+                cp ../../scripting_workspace/target/aarch64-unknown-linux-gnu/minimize/librust_ffi.a $(out_dir linux arm64)
             else
-                cp ../../scripting_workspace/formatter/target/x86_64-unknown-linux-gnu/minimize/libstylua_ffi.a $(out_dir linux x64)
+                cp ../../scripting_workspace/target/x86_64-unknown-linux-gnu/minimize/librust_ffi.a $(out_dir linux x64)
             fi
             # Only mark scripting support if the workspace lib actually has real
             # symbols (not just a dummy stub). Without the real lib,
@@ -309,7 +334,7 @@ elif [[ $machine = "linux" ]]; then
         du -hs $COPY_TO/libluau_vm.a
         du -hs $COPY_TO/libluau_compiler.a
         du -hs $COPY_TO/libluau_analyzer.a
-        du -hs $COPY_TO/libstylua_ffi.a
+        du -hs $COPY_TO/librust_ffi.a
         du -hs $COPY_TO/libminiaudio.a
         du -hs $COPY_TO/libbrotli.a
     fi
@@ -368,8 +393,8 @@ elif [[ $machine = "macosx" ]]; then
                 # When building for the editor the stylua lib is the real one
                 # built via the Rust toolchain. So we need to copy the static
                 # libraries to let the rest of the system behave the same.
-                cp ../../scripting_workspace/formatter/target/x86_64-apple-darwin/minimize/libstylua_ffi.a $(out_dir macosx x64)
-                cp ../../scripting_workspace/formatter/target/aarch64-apple-darwin/minimize/libstylua_ffi.a $(out_dir macosx arm64)
+                cp ../../scripting_workspace/target/x86_64-apple-darwin/minimize/librust_ffi.a $(out_dir macosx x64)
+                cp ../../scripting_workspace/target/aarch64-apple-darwin/minimize/librust_ffi.a $(out_dir macosx arm64)
                 #else
                 # When building for the flutter runtime our same premake config
                 # builds stub stylua libs, so we have nothing else to do here.
@@ -390,7 +415,7 @@ elif [[ $machine = "macosx" ]]; then
             rive_native_lipo_macosx libluau_vm.a
             rive_native_lipo_macosx libluau_compiler.a
             rive_native_lipo_macosx libluau_analyzer.a
-            rive_native_lipo_macosx libstylua_ffi.a
+            rive_native_lipo_macosx librust_ffi.a
             rive_native_lipo_macosx libbrotli.a
             # To ensure that the macos podspec file does not overwrite the binaries by downloading them from our bucket
             touch ../macos/rive_marker_macos_development

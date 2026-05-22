@@ -1638,7 +1638,12 @@ bool CommandServer::processCommands()
                 commandStream >> handle;
                 commandStream >> requestId;
                 lock.unlock();
-                m_stateMachines.erase(handle);
+                auto it = m_stateMachines.find(handle);
+                if (it != m_stateMachines.end())
+                {
+                    it->second.get()->dispose();
+                    m_stateMachines.erase(it);
+                }
                 std::unique_lock<std::mutex> messageLock(
                     m_commandQueue->m_messageMutex);
                 messageStream << CommandQueue::Message::stateMachineDeleted;
@@ -1709,6 +1714,37 @@ bool CommandServer::processCommands()
                         << " when getting list of artboards";
                 }
 
+                break;
+            }
+
+            case CommandQueue::Command::getViewModelInstanceViewModelName:
+            {
+                ViewModelInstanceHandle handle;
+                uint64_t requestId;
+                commandStream >> handle;
+                commandStream >> requestId;
+                lock.unlock();
+                auto viewModelInstance = getViewModelInstance(handle);
+                if (viewModelInstance)
+                {
+                    std::unique_lock<std::mutex> messageLock(
+                        m_commandQueue->m_messageMutex);
+                    messageStream << CommandQueue::Message::
+                            viewModelInstanceViewModelNameReceived;
+                    messageStream << handle;
+                    messageStream << requestId;
+                    m_commandQueue->m_messageNames
+                        << viewModelInstance->viewModelName();
+                }
+                else
+                {
+                    ErrorReporter<ViewModelInstanceHandle>(
+                        this,
+                        handle,
+                        requestId,
+                        CommandQueue::Message::viewModelError)
+                        << "Invalid view model instance handle " << handle;
+                }
                 break;
             }
 

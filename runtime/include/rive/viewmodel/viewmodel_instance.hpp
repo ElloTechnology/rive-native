@@ -6,10 +6,12 @@
 #include "rive/data_bind/data_bind_container.hpp"
 #include "rive/component.hpp"
 #include "rive/refcnt.hpp"
+#include <cstdint>
 #include <stdio.h>
 namespace rive
 {
 class ViewModel;
+class ViewModelInstanceViewModel;
 class ViewModelInstance : public ViewModelInstanceBase,
                           public RefCnt<ViewModelInstance>
 {
@@ -19,8 +21,19 @@ private:
     std::vector<DataBindContainer*> m_dependents;
     ViewModel* m_ViewModel;
     void rebindDependents();
+    void rebindProperties();
 
 public:
+    static uint32_t pointerKey(const ViewModelInstance* instance)
+    {
+        if (instance == nullptr)
+        {
+            return -1;
+        }
+        auto ptr = reinterpret_cast<uint64_t>(instance);
+        return static_cast<uint32_t>(ptr ^ (ptr >> 32));
+    }
+
     ~ViewModelInstance();
     void addValue(ViewModelInstanceValue* value);
     ViewModelInstanceValue* propertyValue(const uint32_t id);
@@ -28,6 +41,8 @@ public:
     ViewModelInstanceValue* propertyValue(const SymbolType symbolType);
     bool replaceViewModelByName(const std::string& name,
                                 rcp<ViewModelInstance> value);
+    bool replaceViewModelByProperty(ViewModelInstanceViewModel*,
+                                    rcp<ViewModelInstance> value);
     std::vector<rcp<ViewModelInstanceValue>> propertyValues();
     ViewModelInstanceValue* propertyFromPath(std::vector<uint32_t>* path,
                                              size_t index);

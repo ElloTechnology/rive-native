@@ -50,7 +50,7 @@ else
         kind('StaticLib')
         files({ 'dummy.cpp' })
     end
-    project('stylua_ffi')
+    project('rust_ffi')
     do
         kind('StaticLib')
         files({ 'dummy.cpp' })
@@ -97,31 +97,25 @@ do
             filter({ 'options:not flutter_runtime', 'options:arch=arm64', 'system:macosx' })
             do
                 libdirs({
-                    '../../scripting_workspace/formatter/target/aarch64-apple-darwin/minimize/',
+                    '../../scripting_workspace/target/aarch64-apple-darwin/minimize/',
                 })
             end
             filter({ 'options:not flutter_runtime', 'options:arch=x64', 'system:macosx' })
             do
                 libdirs({
-                    '../../scripting_workspace/formatter/target/x86_64-apple-darwin/minimize/',
-                })
-            end
-            filter({ 'options:not flutter_runtime', 'options:arch=x64', 'system:macosx' })
-            do
-                libdirs({
-                    '../../scripting_workspace/formatter/target/x86_64-apple-darwin/minimize/',
+                    '../../scripting_workspace/target/x86_64-apple-darwin/minimize/',
                 })
             end
             filter({ 'options:not flutter_runtime', 'options:arch=x64', 'system:linux' })
             do
                 libdirs({
-                    '../../scripting_workspace/formatter/target/x86_64-unknown-linux-gnu/minimize/',
+                    '../../scripting_workspace/target/x86_64-unknown-linux-gnu/minimize/',
                 })
             end
             filter({ 'options:not flutter_runtime', 'options:arch=arm64', 'system:linux' })
             do
                 libdirs({
-                    '../../scripting_workspace/formatter/target/aarch64-unknown-linux-gnu/minimize/',
+                    '../../scripting_workspace/target/aarch64-unknown-linux-gnu/minimize/',
                 })
             end
             filter({ 'options:not flutter_runtime' })
@@ -129,7 +123,7 @@ do
                 links({
                     'luau_analyzer',
                     'rive_scripting_workspace',
-                    'stylua_ffi',
+                    'rust_ffi',
                     'brotli',
                 })
             end
@@ -157,13 +151,13 @@ do
         filter({ 'options:not flutter_runtime', 'options:arch=wasm', 'options:not single-threaded' })
         do
             libdirs({
-                '../../scripting_workspace/formatter/target/wasm32-unknown-emscripten/minimize_web_threaded/',
+                '../../scripting_workspace/target/wasm32-unknown-emscripten/minimize_web_threaded/',
             })
         end
         filter({ 'options:not flutter_runtime', 'options:arch=wasm', 'options:single-threaded' })
         do
             libdirs({
-                '../../scripting_workspace/formatter/target/wasm32-unknown-emscripten/minimize_web/',
+                '../../scripting_workspace/target/wasm32-unknown-emscripten/minimize_web/',
             })
         end
         filter({ 'options:not flutter_runtime' })
@@ -171,7 +165,7 @@ do
             links({
                 'luau_analyzer',
                 'rive_scripting_workspace',
-                'stylua_ffi',
+                'rust_ffi',
                 'brotli',
             })
         end
@@ -261,12 +255,12 @@ do
         filter({ 'system:windows', 'options:not flutter_runtime' })
         do
             libdirs({
-                '../../scripting_workspace/formatter/target/x86_64-pc-windows-msvc/minimize/',
+                '../../scripting_workspace/target/x86_64-pc-windows-msvc/minimize/',
             })
             links({
                 'luau_analyzer',
                 'rive_scripting_workspace',
-                'stylua_ffi',
+                'rust_ffi',
                 'ntdll',
                 'bcrypt',
             })

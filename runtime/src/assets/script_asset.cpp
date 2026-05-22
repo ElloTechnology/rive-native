@@ -128,28 +128,8 @@ bool OptionalScriptedMethods::verifyImplementation(ScriptedObject* object,
         }
         rive_lua_pop(state, 1);
     }
-    if (scriptProtocol == ScriptProtocol::layout)
-    {
-        if (static_cast<lua_Type>(lua_getfield(state, -1, "measure")) ==
-            LUA_TFUNCTION)
-        {
-            m_implementedMethods |= m_measuresBit;
-        }
-        rive_lua_pop(state, 1);
-        if (static_cast<lua_Type>(lua_getfield(state, -1, "resize")) ==
-            LUA_TFUNCTION)
-        {
-            m_implementedMethods |= m_resizesBit;
-        }
-        rive_lua_pop(state, 1);
-        if (static_cast<lua_Type>(lua_getfield(state, -1, "draw")) ==
-            LUA_TFUNCTION)
-        {
-            m_implementedMethods |= m_drawsBit;
-        }
-        rive_lua_pop(state, 1);
-    }
-    else if (scriptProtocol == ScriptProtocol::node)
+    if (scriptProtocol == ScriptProtocol::layout ||
+        scriptProtocol == ScriptProtocol::node)
     {
         if (static_cast<lua_Type>(lua_getfield(state, -1, "draw")) ==
             LUA_TFUNCTION)
@@ -157,6 +137,33 @@ bool OptionalScriptedMethods::verifyImplementation(ScriptedObject* object,
             m_implementedMethods |= m_drawsBit;
         }
         rive_lua_pop(state, 1);
+        if (static_cast<lua_Type>(lua_getfield(state, -1, "keyboardEvent")) ==
+            LUA_TFUNCTION)
+        {
+            m_implementedMethods |= m_wantsKeyboardInputBit;
+        }
+        rive_lua_pop(state, 1);
+        if (static_cast<lua_Type>(lua_getfield(state, -1, "textEvent")) ==
+            LUA_TFUNCTION)
+        {
+            m_implementedMethods |= m_wantsTextInputBit;
+        }
+        rive_lua_pop(state, 1);
+        if (scriptProtocol == ScriptProtocol::layout)
+        {
+            if (static_cast<lua_Type>(lua_getfield(state, -1, "measure")) ==
+                LUA_TFUNCTION)
+            {
+                m_implementedMethods |= m_measuresBit;
+            }
+            rive_lua_pop(state, 1);
+            if (static_cast<lua_Type>(lua_getfield(state, -1, "resize")) ==
+                LUA_TFUNCTION)
+            {
+                m_implementedMethods |= m_resizesBit;
+            }
+            rive_lua_pop(state, 1);
+        }
     }
     else if (scriptProtocol == ScriptProtocol::converter)
     {
@@ -170,6 +177,21 @@ bool OptionalScriptedMethods::verifyImplementation(ScriptedObject* object,
             LUA_TFUNCTION)
         {
             m_implementedMethods |= m_dataReverseConvertsBit;
+        }
+        rive_lua_pop(state, 1);
+    }
+    else if (scriptProtocol == ScriptProtocol::listenerAction)
+    {
+        if (static_cast<lua_Type>(lua_getfield(state, -1, "perform")) ==
+            LUA_TFUNCTION)
+        {
+            m_implementedMethods |= m_listenerPerforms;
+        }
+        rive_lua_pop(state, 1);
+        if (static_cast<lua_Type>(lua_getfield(state, -1, "performAction")) ==
+            LUA_TFUNCTION)
+        {
+            m_implementedMethods |= m_listenerPerformsAction;
         }
         rive_lua_pop(state, 1);
     }

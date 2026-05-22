@@ -1186,4 +1186,73 @@ void main() {
     await subscription.cancel();
     viewModelInstance.dispose();
   });
+
+  test('artboardToBind with ViewModelInstance', () async {
+    final file = File('test/assets/artboard_db_vmi_test.riv');
+    final bytes = await file.readAsBytes();
+    final riveFile =
+        await rive.File.decode(bytes, riveFactory: rive.Factory.flutter);
+    expect(riveFile, isNotNull,
+        reason: 'Expected to decode test/assets/artboard_db_vmi_test.riv');
+
+    // Get the ControlledViewModel and create an instance
+    final controlledViewModel =
+        riveFile!.viewModelByName('ControlledViewModel');
+    expect(controlledViewModel, isNotNull,
+        reason: 'ControlledViewModel should exist in test file');
+
+    final controlledInstance = controlledViewModel!.createInstance();
+    expect(controlledInstance, isNotNull,
+        reason: 'Expected to create ControlledViewModel instance');
+
+    // Create a bindable artboard without a VMI
+    const artboardName = 'ArtboardBlue';
+    final bindableArtboard = riveFile.artboardToBind(artboardName);
+    expect(bindableArtboard, isNotNull,
+        reason: 'BindableArtboard should exist');
+
+    // Create a bindable artboard with a VMI
+    final bindableArtboardWithVmi = riveFile.artboardToBind(
+      artboardName,
+      viewModelInstance: controlledInstance,
+    );
+    expect(bindableArtboardWithVmi, isNotNull,
+        reason: 'BindableArtboard with VMI should exist');
+
+    // Verify both are distinct instances
+    expect(
+      identical(bindableArtboard, bindableArtboardWithVmi),
+      isFalse,
+      reason: 'Different calls should return different instances',
+    );
+
+    // Get the default artboard and its VMI to set artboard properties
+    final artboard = riveFile.defaultArtboard();
+    expect(artboard, isNotNull);
+
+    final vmi =
+        riveFile.defaultArtboardViewModel(artboard!)!.createDefaultInstance();
+    expect(vmi, isNotNull);
+
+    // Set the artboard property with the VMI-bound bindable artboard
+    final artboardProperty = vmi!.artboard('artboard_1');
+    expect(artboardProperty, isNotNull,
+        reason: 'artboard_1 property should exist');
+    artboardProperty!.value = bindableArtboardWithVmi!;
+
+    // Set a regular bindable artboard on the other property
+    final artboardProperty2 = vmi.artboard('artboard_2');
+    expect(artboardProperty2, isNotNull,
+        reason: 'artboard_2 property should exist');
+    artboardProperty2!.value = bindableArtboard!;
+
+    // Clean up
+    controlledInstance!.dispose();
+    bindableArtboard.dispose();
+    bindableArtboardWithVmi.dispose();
+    vmi.dispose();
+    artboard.dispose();
+    controlledViewModel.dispose();
+    riveFile.dispose();
+  });
 }

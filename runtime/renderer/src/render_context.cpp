@@ -9,8 +9,10 @@
 #include "gradient.hpp"
 #include "rive_render_paint.hpp"
 #include "rive/renderer/draw.hpp"
+#include "rive/renderer/render_canvas.hpp"
 #include "rive/renderer/rive_render_image.hpp"
 #include "rive/renderer/render_context_impl.hpp"
+#include "rive/renderer/stack_vector.hpp"
 #include "rive/profiler/profiler_macros.h"
 
 #include "shaders/constants.glsl"
@@ -20,6 +22,8 @@
 #ifdef RIVE_DECODERS
 #include "rive/decoders/bitmap_decoder.hpp"
 #endif
+
+#include "sort_key_builder.hpp"
 
 namespace rive::gpu
 {
@@ -140,6 +144,12 @@ rcp<RenderBuffer> RenderContext::makeRenderBuffer(RenderBufferType type,
                                                   size_t sizeInBytes)
 {
     return m_impl->makeRenderBuffer(type, flags, sizeInBytes);
+}
+
+rcp<RenderCanvas> RenderContext::makeRenderCanvas(uint32_t width,
+                                                  uint32_t height)
+{
+    return m_impl->makeRenderCanvas(width, height);
 }
 
 rcp<RenderImage> RenderContext::decodeImage(Span<const uint8_t> encodedBytes)
@@ -949,6 +959,7 @@ static uint32_t pls_transient_backing_plane_count(
         case gpu::InterlockMode::rasterOrdering:
             return 3; // clip, scratch, coverage
         case gpu::InterlockMode::atomics:
+        case gpu::InterlockMode::clockwiseAtomic:
             return 1; // only clip (coverage is atomic)
         case gpu::InterlockMode::clockwise:
         {
@@ -964,7 +975,6 @@ static uint32_t pls_transient_backing_plane_count(
             }
             return n;
         }
-        case gpu::InterlockMode::clockwiseAtomic:
         case gpu::InterlockMode::msaa:
             return 0; // N/A
     }
@@ -985,6 +995,7 @@ static bool wants_fixed_function_color_output(
             return false;
 
         case gpu::InterlockMode::atomics:
+        case gpu::InterlockMode::clockwiseAtomic:
             return !(combinedDrawContents & gpu::DrawContents::advancedBlend);
 
         case gpu::InterlockMode::clockwise:
@@ -992,10 +1003,6 @@ static bool wants_fixed_function_color_output(
                                              gpu::DrawContents::evenOddFill)));
             return platformFeatures.supportsClockwiseFixedFunctionMode &&
                    !(combinedDrawContents & gpu::DrawContents::advancedBlend);
-
-        case gpu::InterlockMode::clockwiseAtomic:
-            // clockwiseAtomic currently always sets fixedFunctionColorOutput.
-            return true;
 
         case gpu::InterlockMode::msaa:
             // Manual MSAA resolves read the framebuffer, so they can't use
@@ -1276,6 +1283,30 @@ void RenderContext::LogicalFlush::layoutResources(
     RIVE_DEBUG_CODE(m_hasDoneLayout = true;)
 }
 
+void RenderContext::LogicalFlush::scheduleBarriersForNextDraw(
+    BarrierFlags barrierFlags)
+{
+    if (m_ctx->platformFeatures()
+            .clockwiseAtomicBorrowedCoverageBarrierNeedsRenderPassInit &&
+        (barrierFlags & gpu::BarrierFlags::clockwiseBorrowedCoverage) &&
+        (m_combinedDrawContents & gpu::DrawContents::advancedBlend))
+    {
+        m_drawList.emplace_back(m_ctx->perFrameAllocator(),
+                                gpu::DrawType::renderPassInitialize,
+                                ShaderMiscFlags::none,
+                                gpu::DrawContents::none,
+                                1,
+                                0,
+                                BlendMode::overlay,
+                                ImageSampler::LinearClamp(),
+                                gpu::BarrierFlags::clockwiseBorrowedCoverage |
+                                    BarrierFlags::dstBlend);
+        barrierFlags &= ~gpu::BarrierFlags::clockwiseBorrowedCoverage;
+    }
+
+    m_pendingBarriers |= barrierFlags;
+}
+
 void RenderContext::LogicalFlush::writeResources()
 {
     RIVE_PROF_SCOPE()
@@ -1421,8 +1452,7 @@ void RenderContext::LogicalFlush::writeResources()
 
     // Write out all the data for our high level draws, and build up a low-level
     // draw list.
-    if (m_ctx->frameInterlockMode() == gpu::InterlockMode::rasterOrdering ||
-        m_ctx->frameInterlockMode() == gpu::InterlockMode::clockwise)
+    if (m_ctx->frameInterlockMode() == gpu::InterlockMode::rasterOrdering)
     {
         for (const DrawUniquePtr& draw : m_draws)
         {
@@ -1504,24 +1534,34 @@ void RenderContext::LogicalFlush::writeResources()
         intersectionBoard->resizeAndReset(m_flushDesc.renderTarget->width(),
                                           m_flushDesc.renderTarget->height());
 
-        // Build a list of sort keys that determine the final draw order.
-        constexpr static int kDrawGroupShift =
-            48; // Where in the key does the draw group begin?
-        constexpr static int64_t kDrawGroupMask = 0x7fffllu << kDrawGroupShift;
-        constexpr static int kDrawTypeShift = 45;
-        constexpr static int64_t kDrawTypeMask RIVE_MAYBE_UNUSED =
-            7llu << kDrawTypeShift;
-        constexpr static int kTextureHashShift = 31;
-        constexpr static int64_t kTextureHashMask = 0x3fffllu
-                                                    << kTextureHashShift;
-        constexpr static int kBlendModeShift = 27;
-        constexpr static int kBlendModeMask = 0xf << kBlendModeShift;
-        constexpr static int kDrawContentsShift = 18;
-        constexpr static int64_t kDrawContentsMask = 0x1ffllu
-                                                     << kDrawContentsShift;
-        constexpr static int kDrawIndexShift = 2;
-        constexpr static int64_t kDrawIndexMask = 0x7fff << kDrawIndexShift;
-        constexpr static int64_t kSubpassIndexMask = 0x3;
+        static constexpr SortKeyBuilder keyBuilder{
+            // Our top priority in re-ordering is to group non-overlapping draws
+            // together, in order to maximize batching while preserving
+            // correctness.
+            {.entry = SortEntry::drawGroup, .bitCount = 15},
+
+            // Within sub-groups of non-overlapping draws, sort similar draw
+            // types together.
+            {.entry = SortEntry::drawType, .bitCount = 3},
+
+            // Within sub-groups of matching draw type, sort by texture binding.
+            {.entry = SortEntry::textureHash, .bitCount = 14},
+
+            // If using KHR_blend_equation_advanced, we need a batching barrier
+            // between draws with different blend modes. If not using
+            // KHR_blend_equation_advanced, sorting by blend mode may still give
+            // us better branching on the GPU.
+            {.entry = SortEntry::blendMode, .bitCount = 4},
+
+            // msaa mode draws strokes, fills, and even/odd with different
+            // stencil settings.
+            {.entry = SortEntry::drawContents, .bitCount = 9},
+
+            // Draw and subpass indices go at the bottom of the key so we can
+            // reference them again after sorting without affecting the order.
+            {.entry = SortEntry::drawIndex, .bitCount = 15},
+            {.entry = SortEntry::subpassIndex, .bitCount = 3},
+        };
 
         for (size_t i = 0; i < m_draws.size(); ++i)
         {
@@ -1549,50 +1589,22 @@ void RenderContext::LogicalFlush::writeResources()
                                                 kDisallowOverlapMask,
                                                 maxPasses);
             assert(drawGroupIdx > 0);
-            int64_t key = static_cast<int64_t>(drawGroupIdx) << kDrawGroupShift;
-
-            // Within sub-groups of non-overlapping draws, sort similar draw
-            // types together.
-            int64_t drawType = static_cast<int64_t>(draw->type());
-            assert(drawType <= kDrawTypeMask >> kDrawTypeShift);
-            key |= drawType << kDrawTypeShift;
-
-            // Within sub-groups of matching draw type, sort by texture binding.
-            int64_t textureHash =
-                draw->imageTexture() != nullptr
-                    ? draw->imageTexture()->textureResourceHash() &
-                          (kTextureHashMask >> kTextureHashShift)
+            const auto textureHash =
+                (draw->imageTexture() != nullptr)
+                    ? draw->imageTexture()->textureResourceHash()
                     : 0;
-            key |= textureHash << kTextureHashShift;
+            int64_t key = keyBuilder.buildKey({
+                {SortEntry::blendMode,
+                 gpu::ConvertBlendModeToPLSBlendMode(draw->blendMode())},
+                {SortEntry::drawContents, draw->drawContents()},
+                {SortEntry::drawIndex, i},
+                {SortEntry::drawGroup, drawGroupIdx},
+                {SortEntry::drawType, draw->type()},
+                {SortEntry::subpassIndex, 0}, // This gets added later
 
-            // If using KHR_blend_equation_advanced, we need a batching barrier
-            // between draws with different blend modes. If not using
-            // KHR_blend_equation_advanced, sorting by blend mode may still give
-            // us better branching on the GPU.
-            int64_t blendMode =
-                gpu::ConvertBlendModeToPLSBlendMode(draw->blendMode());
-            assert(blendMode <= kBlendModeMask >> kBlendModeShift);
-            key |= blendMode << kBlendModeShift;
-
-            // msaa mode draws strokes, fills, and even/odd with different
-            // stencil settings.
-            int64_t drawContents = static_cast<int64_t>(draw->drawContents());
-            assert(drawContents <= kDrawContentsMask >> kDrawContentsShift);
-            key |= drawContents << kDrawContentsShift;
-
-            // Draw and subpass indices go at the bottom of the key so we can
-            // reference them again after sorting without affecting the order.
-            assert(i <= kDrawIndexMask >> kDrawIndexShift);
-            key |= i << kDrawIndexShift;
-
-            assert((key & kDrawGroupMask) >> kDrawGroupShift == drawGroupIdx);
-            assert((key & kDrawTypeMask) >> kDrawTypeShift == drawType);
-            assert((key & kTextureHashMask) >> kTextureHashShift ==
-                   textureHash);
-            assert((key & kBlendModeMask) >> kBlendModeShift == blendMode);
-            assert((key & kDrawContentsMask) >> kDrawContentsShift ==
-                   drawContents);
-            assert((key & kDrawIndexMask) >> kDrawIndexShift == i);
+                // The hash may lose bits in the key
+                {SortEntry::textureHash, textureHash, ValidateKeyEntry::no},
+            });
 
             // Add the first prepass and subpass, if any.
             if (draw->prepassCount() > 0)
@@ -1612,10 +1624,16 @@ void RenderContext::LogicalFlush::writeResources()
                 // Increment the drawGroupIdx and i both at once. (The
                 // intersectionBoard already reserved "maxPasses" layers of
                 // drawGroupIndices for us.)
-                key += (1ll << kDrawGroupShift) + 1;
-                assert((key & kDrawGroupMask) >> kDrawGroupShift ==
+                static constexpr auto INCREMENT = keyBuilder.buildPartialKey({
+                    {SortEntry::drawGroup, 1},
+                    {SortEntry::subpassIndex, 1},
+                });
+                key += INCREMENT;
+
+                assert(keyBuilder.extract<int16_t>(SortEntry::drawGroup, key) ==
                        drawGroupIdx + i);
-                assert((key & kSubpassIndexMask) == i);
+                assert(keyBuilder.extract<int>(SortEntry::subpassIndex, key) ==
+                       i);
 
                 if (i < draw->prepassCount())
                 {
@@ -1680,72 +1698,96 @@ void RenderContext::LogicalFlush::writeResources()
             m_combinedDrawContents |= m_drawList.tail()->drawContents;
             // The draw that follows the this init will need a special
             // "msaaPostInit" barrier.
-            m_pendingBarriers |= BarrierFlags::msaaPostInit;
+            scheduleBarriersForNextDraw(BarrierFlags::msaaPostInit);
             assert(m_dstBlendBarrierListTail == &m_firstDstBlendBarrier);
             assert(m_firstDstBlendBarrier == nullptr);
             m_firstDstBlendBarrier = m_drawList.tail();
             m_dstBlendBarrierListTail = &m_drawList.tail()->nextDstBlendBarrier;
         }
 
+        // Indicates required barriers between draws whose keys differ on the
+        // given mask.
+        struct BarriersForKeyDiff
+        {
+            int64_t mask;
+            BarrierFlags barrier;
+        };
+        StackVector<BarriersForKeyDiff, 2> barriersForKeyDiffs;
+
         // Find a mask that tells us when to insert barriers, and which barriers
         // are needed. When the keys of two adjacent draws differ within this
         // bitmask, we insert a barrier between them.
-        int64_t needsBarrierMask = 0;
-        BarrierFlags neededBarriers = BarrierFlags::none;
         switch (m_flushDesc.interlockMode)
         {
             case gpu::InterlockMode::rasterOrdering:
-            case gpu::InterlockMode::clockwise:
                 // rasterOrdering and clockwise modes don't reorder draws.
                 RIVE_UNREACHABLE();
 
             case gpu::InterlockMode::atomics:
+            {
                 // In atomic mode, we need barriers any time draws overlap.
                 // Insert a barrier every time the drawGroupIdx changes.
-                needsBarrierMask = kDrawGroupMask;
-                neededBarriers = BarrierFlags::plsAtomic;
+                barriersForKeyDiffs.push_back(
+                    {keyBuilder.mask(SortEntry::drawGroup),
+                     BarrierFlags::plsAtomic});
                 // We need a plsAtomic barrier after the initial clears, loads,
                 // etc.
-                assert(m_pendingBarriers == BarrierFlags::none);
-                m_pendingBarriers = BarrierFlags::plsAtomic;
+                scheduleBarriersForNextDraw(BarrierFlags::plsAtomic);
+                break;
+            }
+
+            case gpu::InterlockMode::clockwise:
+                // clockwise mode doesn't need barriers, but we still reorder in
+                // order to improve batching.
                 break;
 
             case gpu::InterlockMode::clockwiseAtomic:
+            {
                 // In clockwiseAtomic mode, we only need a barrier between the
                 // borrowedCoverage prepasses and the main rendering. Prepasses
                 // have a negative key, so just insert a barrier when the sign
                 // changes.
-                needsBarrierMask = 1ll << 63;
-                neededBarriers = BarrierFlags::clockwiseBorrowedCoverage;
+                constexpr static int64_t SIGN_BIT = (1ll << 63);
+                barriersForKeyDiffs.push_back(
+                    {SIGN_BIT, BarrierFlags::clockwiseBorrowedCoverage});
+                // Just break batching between draw groups. If we also need a
+                // dstBlend or clip barrier, that will be scheduled later.
+                barriersForKeyDiffs.push_back(
+                    {keyBuilder.mask(SortEntry::drawGroup),
+                     BarrierFlags::drawBatchBreak});
                 if (indirectDrawList.empty() || indirectDrawList[0] >= 0)
                 {
                     // There are no borrowed coverage passes. Initiate the
                     // transition to the main subpass immediately.
-                    assert(m_pendingBarriers == BarrierFlags::none);
-                    m_pendingBarriers = BarrierFlags::clockwiseBorrowedCoverage;
+                    scheduleBarriersForNextDraw(
+                        BarrierFlags::clockwiseBorrowedCoverage);
                 }
                 break;
+            }
 
             case gpu::InterlockMode::msaa:
+            {
                 // MSAA mode can't batch draws that overlap because they both
                 // rely on the stencil buffer across subpasses. Stop batching
                 // every time the drawGroupIdx changes.
-                needsBarrierMask = kDrawGroupMask;
+                int64_t needsBreakMask = keyBuilder.mask(SortEntry::drawGroup);
                 // MSAA mode draws clips, strokes, fills, and even/odd with
                 // different stencil settings, so these can't be batched.
-                needsBarrierMask |= kDrawContentsMask;
+                needsBreakMask |= keyBuilder.mask(SortEntry::drawContents);
                 if (platformFeatures.supportsBlendAdvancedKHR)
                 {
                     // If using KHR_blend_equation_advanced, we also need to
                     // stop batching between blend modes in order to change the
                     // blend equation.
-                    needsBarrierMask |= kBlendModeMask;
+                    needsBreakMask |= keyBuilder.mask(SortEntry::blendMode);
                 }
                 // MSAA barriers only need to prevent batching of draws for now.
                 // If we also need a dstBlend barrier, that will be decided
                 // later.
-                neededBarriers = BarrierFlags::drawBatchBreak;
+                barriersForKeyDiffs.push_back(
+                    {needsBreakMask, BarrierFlags::drawBatchBreak});
                 break;
+            }
         }
 
         // Write out the draw data from the sorted draw list, and build up a
@@ -1755,17 +1797,23 @@ void RenderContext::LogicalFlush::writeResources()
         for (const int64_t signedKey : indirectDrawList)
         {
             assert(signedKey >= priorSignedKey);
-            // The first draw always gets barriers because we need the barriers
-            // after the initial clears, loads, etc.
-            if (priorSignedKey != BEGIN_KEY &&
-                (priorSignedKey & needsBarrierMask) !=
-                    (signedKey & needsBarrierMask))
+            // The first draw never gets barriers. If barriers are required
+            // before the first draw, those get scheduled outside this loop.
+            if (priorSignedKey != BEGIN_KEY)
             {
-                m_pendingBarriers |= neededBarriers;
+                for (auto [mask, barriers] : barriersForKeyDiffs)
+                {
+                    if ((priorSignedKey & mask) != (signedKey & mask))
+                    {
+                        scheduleBarriersForNextDraw(barriers);
+                    }
+                }
             }
             int64_t key = abs(signedKey);
-            uint32_t drawIndex = (key & kDrawIndexMask) >> kDrawIndexShift;
-            int subpassIndex = key & kSubpassIndexMask;
+            auto drawIndex =
+                keyBuilder.extract<uint32_t>(SortEntry::drawIndex, key);
+            auto subpassIndex =
+                keyBuilder.extract<int>(SortEntry::subpassIndex, key);
             if (signedKey < 0)
             {
                 // Negative keys are a prepass. Update the subpassIndex to be
@@ -1775,7 +1823,7 @@ void RenderContext::LogicalFlush::writeResources()
             // FIXME: m_currentZIndex shouldn't be a stateful variable; it
             // should be passed to pushToRenderContext() instead.
             m_currentZIndex = math::lossless_numeric_cast<uint32_t>(
-                abs(key >> static_cast<int64_t>(kDrawGroupShift)));
+                keyBuilder.extract<uint32_t>(SortEntry::drawGroup, key));
             m_draws[drawIndex]->pushToRenderContext(this, subpassIndex);
             priorSignedKey = signedKey;
         }
@@ -2480,7 +2528,7 @@ uint32_t RenderContext::incrementCoverageBufferPrefix(
             // monotonically increasing.
             *needsCoverageBufferClear = true;
         }
-        m_coverageBufferPrefix += 1 << CLOCKWISE_COVERAGE_BIT_COUNT;
+        m_coverageBufferPrefix += CLOCKWISE_COVERAGE_PREFIX_ONE_VALUE;
     } while (m_coverageBufferPrefix == 0);
 
     return m_coverageBufferPrefix;
@@ -3154,6 +3202,15 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushDraw(
 
     shaderMiscFlags |= m_baselineShaderMiscFlags;
 
+    if ((m_ctx->frameInterlockMode() == gpu::InterlockMode::clockwiseAtomic ||
+         m_ctx->frameInterlockMode() == gpu::InterlockMode::msaa) &&
+        draw->blendMode() == BlendMode::srcOver)
+    {
+        // In clockwiseAtomic and msaa modes, individual draws can use
+        // fixedFunctionColorOutput even if the render pass as a whole does not.
+        shaderMiscFlags |= gpu::ShaderMiscFlags::fixedFunctionColorOutput;
+    }
+
     bool canMergeWithPreviousBatch;
     switch (drawType)
     {
@@ -3321,7 +3378,15 @@ gpu::DrawBatch& RenderContext::LogicalFlush::pushDraw(
         assert(batch->imageTexture == draw->imageTexture());
     }
 
-    if (m_ctx->frameInterlockMode() == gpu::InterlockMode::msaa)
+    if (m_ctx->frameInterlockMode() == gpu::InterlockMode::clockwiseAtomic)
+    {
+        if (draw->blendMode() != BlendMode::srcOver &&
+            !(shaderMiscFlags & gpu::ShaderMiscFlags::borrowedCoveragePass))
+        {
+            batch->barriers |= BarrierFlags::dstBlend;
+        }
+    }
+    else if (m_ctx->frameInterlockMode() == gpu::InterlockMode::msaa)
     {
         // msaa does't mix src-over draws with advanced blend draws.
         assert((batch->shaderFeatures &

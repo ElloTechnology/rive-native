@@ -48,10 +48,9 @@ mixin AudioSourceWasm {
 
   AudioFormat get format =>
       AudioFormat.values[(_audioSourceFormat.callAsFunction(
-                null,
-                nativePtr.toJS,
-              )
-              as js.JSNumber)
+        null,
+        nativePtr.toJS,
+      ) as js.JSNumber)
           .toDartInt];
 
   void dispose() {
@@ -84,45 +83,38 @@ class StreamingAudioSourceWasm extends StreamingAudioSource
 
   @override
   Future<BufferedAudioSource> makeBuffered({int? channels, int? sampleRate}) {
-    var decodeWorkPtr =
-        (_makeAudioReader.callAsFunction(
-                  null,
-                  nativePtr.toJS,
-                  (channels ?? this.channels).toJS,
-                  (sampleRate ?? this.sampleRate).toJS,
-                )
-                as js.JSNumber)
-            .toDartInt;
+    var decodeWorkPtr = (_makeAudioReader.callAsFunction(
+      null,
+      nativePtr.toJS,
+      (channels ?? this.channels).toJS,
+      (sampleRate ?? this.sampleRate).toJS,
+    ) as js.JSNumber)
+        .toDartInt;
     final completer = Completer<BufferedAudioSource>();
     Timer.periodic(const Duration(milliseconds: 10), (timer) {
-      var obj =
-          _audioReaderRead.callAsFunction(null, decodeWorkPtr.toJS)
-              as js.JSObject;
+      var obj = _audioReaderRead.callAsFunction(null, decodeWorkPtr.toJS)
+          as js.JSObject;
       var data = (obj['data'] as js.JSNumber).toDartInt;
 
       if (data != 0) {
         assert(data % 4 == 0);
         timer.cancel();
 
-        var nativeBufferedSource =
-            (_makeBufferedAudioSource.callAsFunction(
-                      null,
-                      decodeWorkPtr.toJS,
-                      (channels ?? this.channels).toJS,
-                      (sampleRate ?? this.sampleRate).toJS,
-                    )
-                    as js.JSNumber)
-                .toDartInt;
+        var nativeBufferedSource = (_makeBufferedAudioSource.callAsFunction(
+          null,
+          decodeWorkPtr.toJS,
+          (channels ?? this.channels).toJS,
+          (sampleRate ?? this.sampleRate).toJS,
+        ) as js.JSNumber)
+            .toDartInt;
 
         // Decode worker can be nuked now.
         _unrefAudioReader.callAsFunction(null, decodeWorkPtr.toJS);
 
-        var samplesSpan =
-            _bufferedAudioSamples.callAsFunction(
-                  null,
-                  nativeBufferedSource.toJS,
-                )
-                as js.JSObject;
+        var samplesSpan = _bufferedAudioSamples.callAsFunction(
+          null,
+          nativeBufferedSource.toJS,
+        ) as js.JSObject;
         var samplesData = (samplesSpan['data'] as js.JSNumber).toDartInt;
         var samplesCount = (samplesSpan['count'] as js.JSNumber).toDartInt;
         completer.complete(
@@ -266,14 +258,13 @@ class AudioEngineWasm extends AudioEngine {
     }
     return AudioSoundWasm(
       (_playAudioSource.callAsFunction(
-                null,
-                (source as AudioSourceWasm).nativePtr.toJS,
-                nativePtr.toJS,
-                engineStartTime.toJS,
-                engineEndTime.toJS,
-                soundStartTime.toJS,
-              )
-              as js.JSNumber)
+        null,
+        (source as AudioSourceWasm).nativePtr.toJS,
+        nativePtr.toJS,
+        engineStartTime.toJS,
+        engineEndTime.toJS,
+        soundStartTime.toJS,
+      ) as js.JSNumber)
           .toDartInt,
       sampleRate,
     );
@@ -291,15 +282,14 @@ class AudioEngineWasm extends AudioEngine {
 
   @override
   void stop() {
-    _stopAudio.callAsFunction(nativePtr.toJS);
+    _stopAudio.callAsFunction(null, nativePtr.toJS);
   }
 }
 
 StreamingAudioSource loadAudioSource(Uint8List bytes) {
-  var simpleArrayUint8 =
-      (_makeAudioSourceBuffer.callAsFunction(null, bytes.length.toJS)
-              as js.JSNumber)
-          .toDartInt;
+  var simpleArrayUint8 = (_makeAudioSourceBuffer.callAsFunction(
+          null, bytes.length.toJS) as js.JSNumber)
+      .toDartInt;
 
   var data = AudioEngineWasm.wasmHeapUint8(
     (_simpleArrayData.callAsFunction(null, simpleArrayUint8.toJS)
@@ -317,10 +307,9 @@ StreamingAudioSource loadAudioSource(Uint8List bytes) {
 }
 
 AudioEngine? initAudioDevice(int channels, int sampleRate) {
-  var engine =
-      (_makeAudioEngine.callAsFunction(null, channels.toJS, sampleRate.toJS)
-              as js.JSNumber)
-          .toDartInt;
+  var engine = (_makeAudioEngine.callAsFunction(
+          null, channels.toJS, sampleRate.toJS) as js.JSNumber)
+      .toDartInt;
 
   if (engine == 0) {
     return null;

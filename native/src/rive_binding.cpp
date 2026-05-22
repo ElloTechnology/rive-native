@@ -36,6 +36,9 @@
 #include "rive/animation/state_machine_number.hpp"
 #include "rive/animation/state_machine_trigger.hpp"
 #include "rive/animation/cubic_ease_interpolator.hpp"
+#include "rive/animation/cubic_value_interpolator.hpp"
+#include "rive/animation/elastic_interpolator.hpp"
+#include "rive/animation/keyframe_interpolator.hpp"
 #include "rive/assets/file_asset.hpp"
 #include "rive/assets/image_asset.hpp"
 #include "rive/assets/font_asset.hpp"
@@ -56,12 +59,25 @@
 #include "rive/lua/scripting_vm.hpp"
 #endif
 #include <memory>
+#include "rive/focus_data.hpp"
+#include "rive/input/focusable.hpp"
+#include "rive/input/focus_manager.hpp"
+#include "rive/math/aabb.hpp"
 #include <mutex>
 #include <unordered_map>
 
 using namespace rive;
 
 std::mutex g_deleteMutex;
+
+#if defined(__EMSCRIPTEN__) && defined(WITH_RIVE_TOOLS)
+#include <emscripten/val.h>
+// Forward declarations for WASM callback cleanup
+extern std::unordered_map<rive::FocusManager*, emscripten::val>
+    g_focusChangedCallbacksWasm;
+extern std::unordered_map<rive::FocusManager*, emscripten::val>
+    g_scrollIntoViewCallbacksWasm;
+#endif
 
 #ifdef WITH_RIVE_TOOLS
 class ViewModelInstanceRegistrarImpl : public ViewModelInstanceRegistrar
@@ -132,6 +148,7 @@ emscripten::val g_viewModelUpdateSymbolListIndex = val::null();
 emscripten::val g_viewModelUpdateAsset = val::null();
 emscripten::val g_viewModelUpdateArtboard = val::null();
 emscripten::val g_viewModelUpdateList = val::null();
+emscripten::val g_viewModelUpdateViewModel = val::null();
 emscripten::val g_viewModelInstanceSerialized = val::null();
 using ViewModelUpdateNumber = emscripten::val;
 using ViewModelUpdateBoolean = emscripten::val;
@@ -143,6 +160,7 @@ using ViewModelUpdateSymbolListIndex = emscripten::val;
 using ViewModelUpdateAsset = emscripten::val;
 using ViewModelUpdateArtboard = emscripten::val;
 using ViewModelUpdateList = emscripten::val;
+using ViewModelUpdateViewModel = emscripten::val;
 using ViewModelInstanceSerialized = emscripten::val;
 #else
 typedef void (*ViewModelUpdateNumber)(uint64_t pointer, float value);
@@ -156,6 +174,7 @@ typedef void (*ViewModelUpdateSymbolListIndex)(uint64_t pointer,
 typedef void (*ViewModelUpdateAsset)(uint64_t pointer, uint32_t value);
 typedef void (*ViewModelUpdateArtboard)(uint64_t pointer, uint32_t value);
 typedef void (*ViewModelUpdateList)(uint64_t pointer);
+typedef void (*ViewModelUpdateViewModel)(uint64_t pointer);
 typedef void (*ViewModelInstanceSerialized)(uint64_t pointer,
                                             const uint8_t* data,
                                             size_t size);
@@ -170,6 +189,7 @@ ViewModelUpdateAsset g_viewModelUpdateAsset = nullptr;
 ViewModelUpdateArtboard g_viewModelUpdateArtboard = nullptr;
 ViewModelUpdateList g_viewModelUpdateList = nullptr;
 ViewModelInstanceSerialized g_viewModelInstanceSerialized = nullptr;
+ViewModelUpdateViewModel g_viewModelUpdateViewModel = nullptr;
 #endif
 
 using namespace rive;
@@ -358,9 +378,44 @@ public:
 #endif
     }
 
-#ifdef DEBUG
-    ~WrappedStateMachine() { g_stateMachineCount--; }
+    ~WrappedStateMachine()
+    {
+        // Clean up the focus tree BEFORE the StateMachineInstance (and its
+        // FocusManager) is destroyed. The artboard and its nested artboards
+        // store raw pointers to the FocusManager, which would become dangling
+        // when m_stateMachine is implicitly destroyed.
+        if (m_stateMachine != nullptr && m_wrappedArtboard != nullptr)
+        {
+#ifdef WITH_RIVE_TOOLS
+            // Clear the focus changed callback before cleanup to prevent
+            // invoking Dart callbacks during destruction. This is critical
+            // during Dart finalizer execution where calling back into Dart
+            // is not allowed ("leaf call" error).
+            //
+            // IMPORTANT: Only clear the callback on the INTERNAL FocusManager.
+            // If an external FocusManager is set, its lifecycle is managed by
+            // Dart (via FocusManagerFFI), and it may have already been disposed
+            // before this destructor runs. Touching it would cause a
+            // use-after-free.
+            if (!m_stateMachine->hasExternalFocusManager())
+            {
+                auto* fm = m_stateMachine->internalFocusManager();
+                if (fm != nullptr)
+                {
+                    fm->setFocusChangedCallback(nullptr);
+                }
+            }
 #endif
+            auto* artboard = m_wrappedArtboard->artboard();
+            if (artboard != nullptr)
+            {
+                artboard->cleanupFocusTree();
+            }
+        }
+#ifdef DEBUG
+        g_stateMachineCount--;
+#endif
+    }
 
     StateMachineInstance* stateMachine() { return m_stateMachine.get(); }
 
@@ -1822,7 +1877,8 @@ EXPORT WrappedVMIArtboardRuntime* vmiRuntimeGetArtboardProperty(
 
 EXPORT void setVMIArtboardRuntimeValue(
     WrappedVMIArtboardRuntime* wrappedArtboardProperty,
-    WrappedBindableArtboard* wrappedBindableArtboard)
+    WrappedBindableArtboard* wrappedBindableArtboard,
+    WrappedVMIRuntime* wrappedViewModelInstance)
 {
     if (wrappedArtboardProperty == nullptr ||
         wrappedBindableArtboard == nullptr)
@@ -1831,6 +1887,10 @@ EXPORT void setVMIArtboardRuntimeValue(
     }
     wrappedArtboardProperty->instance()->value(
         wrappedBindableArtboard->artboard());
+    wrappedArtboardProperty->instance()->viewModelInstance(
+        wrappedViewModelInstance
+            ? wrappedViewModelInstance->instance()->instance()
+            : nullptr);
 }
 
 EXPORT void artboardSetVMIRuntime(WrappedArtboard* wrappedArtboard,
@@ -2235,6 +2295,67 @@ EXPORT void setViewModelInstanceArtboardValue(
     auto viewModelInstanceArtboard =
         viewModelInstance->as<ViewModelInstanceArtboard>();
     viewModelInstanceArtboard->propertyValue(value);
+}
+
+EXPORT void setViewModelInstanceViewModelValue(
+    ViewModelInstanceValue* viewModelInstanceValue,
+    ViewModelInstance* viewModelInstance)
+{
+    if (viewModelInstance == nullptr || viewModelInstanceValue == nullptr)
+    {
+        return;
+    }
+    auto viewModelInstanceViewModel =
+        viewModelInstanceValue->as<ViewModelInstanceViewModel>();
+    viewModelInstanceViewModel->updateViewModel(viewModelInstance);
+}
+
+EXPORT void setViewModelInstanceListValue(
+    ViewModelInstanceValue* viewModelInstanceValue,
+    ViewModelInstance* const* instances,
+    size_t count)
+{
+    if (viewModelInstanceValue == nullptr)
+    {
+        return;
+    }
+    auto list = viewModelInstanceValue->as<ViewModelInstanceList>();
+    if (list == nullptr)
+    {
+        return;
+    }
+    // Build a pool of existing wrappers keyed by the ViewModelInstance
+    // they wrap. Using a multimap so that duplicate VMI entries each get
+    // their own wrapper and a given wrapper is reused at most once.
+    std::unordered_multimap<ViewModelInstance*, rcp<ViewModelInstanceListItem>>
+        pool;
+    for (auto& existing : list->listItems())
+    {
+        pool.emplace(existing->viewModelInstance().get(), existing);
+    }
+    std::vector<rcp<ViewModelInstanceListItem>> items;
+    items.reserve(count);
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (instances != nullptr && instances[i] != nullptr)
+        {
+            // Reuse an existing wrapper if one is still available in
+            // the pool, to preserve pointer identity.
+            auto it = pool.find(instances[i]);
+            if (it != pool.end())
+            {
+                items.push_back(std::move(it->second));
+                pool.erase(it);
+            }
+            else
+            {
+                auto item = rcp(new ViewModelInstanceListItem());
+                item->viewModelInstance(ref_rcp(instances[i]));
+                items.push_back(std::move(item));
+            }
+        }
+    }
+    list->updateList(&items);
 }
 
 // Buffer response structure for serialized data
@@ -2824,6 +2945,15 @@ EXPORT const char* artboardName(WrappedArtboard* wrappedArtboard)
     return toCString(name);
 }
 
+EXPORT void* artboardGetInnerPointer(WrappedArtboard* wrappedArtboard)
+{
+    if (wrappedArtboard == nullptr)
+    {
+        return nullptr;
+    }
+    return static_cast<void*>(wrappedArtboard->artboard());
+}
+
 EXPORT WrappedLinearAnimation* artboardAnimationNamed(
     WrappedArtboard* wrappedArtboard,
     const char* name)
@@ -3099,21 +3229,188 @@ EXPORT void updateLayoutBounds(WrappedArtboard* wrappedArtboard, bool animate)
     wrappedArtboard->artboard()->updateLayoutBounds(animate);
 }
 
-EXPORT void cascadeLayoutStyle(WrappedArtboard* wrappedArtboard, int direction)
+// Resolves the inherited interpolator for one artboard and applies the cascade.
+// The single-artboard export reuses an existing interpolator when the type
+// hasn't changed (avoids allocation on repeated calls). The batch export always
+// creates fresh, so it passes reuseExisting=false.
+static void applyCascadeLayoutStyle(rive::Artboard* artboard,
+                                    int direction,
+                                    int interpolationType,
+                                    float interpolationTime,
+                                    int interpolatorTypeKey,
+                                    float p0,
+                                    float p1,
+                                    float p2,
+                                    float p3,
+                                    bool reuseExisting)
+{
+    auto& owned = artboard->ownedInheritedInterpolator();
+
+    // Only build the interpolator when the artboard inherits — otherwise the
+    // cascade discards inherited values immediately, so the work is wasted.
+    KeyFrameInterpolator* interpolator = nullptr;
+    if (interpolatorTypeKey != 0 &&
+        artboard->animationStyle() == LayoutAnimationStyle::inherit)
+    {
+        if (!reuseExisting || owned == nullptr ||
+            static_cast<int>(owned->coreType()) != interpolatorTypeKey)
+        {
+            if (interpolatorTypeKey == CubicEaseInterpolatorBase::typeKey ||
+                interpolatorTypeKey == CubicInterpolatorBase::typeKey ||
+                interpolatorTypeKey == CubicValueInterpolatorBase::typeKey)
+            {
+                owned = std::make_unique<CubicEaseInterpolator>();
+                auto cubic = owned->as<CubicInterpolator>();
+                cubic->x1(p0);
+                cubic->y1(p1);
+                cubic->x2(p2);
+                cubic->y2(p3);
+                cubic->initialize();
+            }
+            else if (interpolatorTypeKey == ElasticInterpolatorBase::typeKey)
+            {
+                owned = std::make_unique<ElasticInterpolator>();
+                auto elastic = owned->as<ElasticInterpolator>();
+                elastic->easingValue((uint32_t)p0);
+                elastic->amplitude(p1);
+                elastic->period(p2);
+                elastic->initialize();
+            }
+        }
+        else
+        {
+            // Same type — update values in-place if they changed.
+            if (owned->is<CubicInterpolator>())
+            {
+                auto cubic = owned->as<CubicInterpolator>();
+                if (cubic->x1() != p0 || cubic->y1() != p1 ||
+                    cubic->x2() != p2 || cubic->y2() != p3)
+                {
+                    cubic->x1(p0);
+                    cubic->y1(p1);
+                    cubic->x2(p2);
+                    cubic->y2(p3);
+                    cubic->initialize();
+                }
+            }
+            else if (owned->is<ElasticInterpolator>())
+            {
+                auto elastic = owned->as<ElasticInterpolator>();
+                if (elastic->easingValue() != (uint32_t)p0 ||
+                    elastic->amplitude() != p1 || elastic->period() != p2)
+                {
+                    elastic->easingValue((uint32_t)p0);
+                    elastic->amplitude(p1);
+                    elastic->period(p2);
+                    elastic->initialize();
+                }
+            }
+        }
+        interpolator = owned.get();
+    }
+    else
+    {
+        owned = nullptr;
+    }
+
+    artboard->cascadeLayoutStyle((LayoutStyleInterpolation)interpolationType,
+                                 interpolator,
+                                 interpolationTime,
+                                 (LayoutDirection)direction);
+}
+
+EXPORT void cascadeLayoutStyle(WrappedArtboard* wrappedArtboard,
+                               int direction,
+                               int interpolationType,
+                               float interpolationTime,
+                               int interpolatorTypeKey,
+                               float p0,
+                               float p1,
+                               float p2,
+                               float p3)
 {
     if (wrappedArtboard == nullptr)
     {
         return;
     }
-    auto artboard = wrappedArtboard->artboard();
-    // TODO::Pass down interpolation values
-    // We may want to pass down more layout component styles, need
-    // to figure out the best way to do that
-    artboard->cascadeLayoutStyle(artboard->interpolation(),
-                                 artboard->interpolator(),
-                                 artboard->interpolationTime(),
-                                 (LayoutDirection)direction);
+    applyCascadeLayoutStyle(wrappedArtboard->artboard(),
+                            direction,
+                            interpolationType,
+                            interpolationTime,
+                            interpolatorTypeKey,
+                            p0,
+                            p1,
+                            p2,
+                            p3,
+                            /*reuseExisting=*/true);
 }
+
+// Batch version: crosses the FFI/WASM boundary once for N artboards.
+// artboards is a pointer-to-pointer array of WrappedArtboard instances
+// (Pointer<Pointer<Void>> on the Dart side).
+EXPORT void cascadeLayoutStyleBatch(void** artboards,
+                                    int count,
+                                    int direction,
+                                    int interpolationType,
+                                    float interpolationTime,
+                                    int interpolatorTypeKey,
+                                    float p0,
+                                    float p1,
+                                    float p2,
+                                    float p3)
+{
+    for (int i = 0; i < count; i++)
+    {
+        auto* wrappedArtboard = static_cast<WrappedArtboard*>(artboards[i]);
+        if (wrappedArtboard == nullptr)
+        {
+            continue;
+        }
+        applyCascadeLayoutStyle(wrappedArtboard->artboard(),
+                                direction,
+                                interpolationType,
+                                interpolationTime,
+                                interpolatorTypeKey,
+                                p0,
+                                p1,
+                                p2,
+                                p3,
+                                /*reuseExisting=*/false);
+    }
+}
+
+#ifdef WITH_RIVE_TOOLS
+// Resolves the collapse for one artboard and applies the cascade.
+static void applyCascadeCollapse(rive::Artboard* artboard, bool collapse)
+{
+    artboard->collapseSingle(collapse);
+}
+
+EXPORT void cascadeCollapse(WrappedArtboard* wrappedArtboard, bool collapse)
+{
+    if (wrappedArtboard == nullptr)
+    {
+        return;
+    }
+    applyCascadeCollapse(wrappedArtboard->artboard(), collapse);
+}
+
+// Batch version: crosses the FFI/WASM boundary once for N artboards.
+// artboards is a pointer-to-pointer array of WrappedArtboard instances
+// (Pointer<Pointer<Void>> on the Dart side).
+EXPORT void cascadeCollapseBatch(void** artboards, int count, bool collapse)
+{
+    for (int i = 0; i < count; i++)
+    {
+        auto* wrappedArtboard = static_cast<WrappedArtboard*>(artboards[i]);
+        if (wrappedArtboard == nullptr)
+        {
+            continue;
+        }
+        applyCascadeCollapse(wrappedArtboard->artboard(), collapse);
+    }
+}
+#endif
 
 EXPORT bool riveArtboardAdvance(WrappedArtboard* wrappedArtboard,
                                 float seconds,
@@ -3682,33 +3979,6 @@ EXPORT uint8_t stateMachineInstanceDragEnd(WrappedStateMachine* wrappedMachine,
     }
     return (uint8_t)wrappedMachine->stateMachine()->dragEnd(Vec2D(x, y),
                                                             timeStamp);
-}
-
-EXPORT bool stateMachineInstanceKeyInput(WrappedStateMachine* wrappedMachine,
-                                         uint16_t value,
-                                         uint8_t modifiers,
-                                         bool isPressed,
-                                         bool isRepeat)
-{
-    if (wrappedMachine == nullptr)
-    {
-        return false;
-    }
-    return wrappedMachine->stateMachine()->keyInput((Key)value,
-                                                    (KeyModifiers)modifiers,
-                                                    isPressed,
-                                                    isRepeat);
-}
-
-EXPORT bool stateMachineInstanceTextInput(WrappedStateMachine* wrappedMachine,
-                                          const char* text)
-{
-    if (wrappedMachine == nullptr)
-    {
-        return false;
-    }
-    std::string stringValue(text);
-    return wrappedMachine->stateMachine()->textInput(stringValue);
 }
 
 EXPORT size_t
@@ -4469,6 +4739,16 @@ static void vmiArtboardCallback(ViewModelInstanceArtboard* vmi, uint32_t value)
     g_viewModelUpdateArtboard(pointer, value);
 }
 
+static void vmiViewModelCallback(ViewModelInstanceViewModel* vmi)
+{
+    if (!CALLBACK_VALID(g_viewModelUpdateViewModel))
+    {
+        return;
+    }
+    auto pointer = reinterpret_cast<std::uintptr_t>(vmi);
+    g_viewModelUpdateViewModel(pointer);
+}
+
 EXPORT ViewModelInstanceNumber* setViewModelInstanceNumberCallback(
     ViewModelInstanceValue* viewModelInstance)
 {
@@ -4557,6 +4837,21 @@ EXPORT ViewModelInstanceList* setViewModelInstanceListCallback(
     viewModelInstanceList->onChanged(vmiListCallback);
 #endif
     return viewModelInstanceList;
+}
+
+EXPORT ViewModelInstanceViewModel* setViewModelInstanceViewModelCallback(
+    ViewModelInstanceValue* viewModelInstance)
+{
+    if (viewModelInstance == nullptr)
+    {
+        return nullptr;
+    }
+    ViewModelInstanceViewModel* viewModelInstanceViewModel =
+        viewModelInstance->as<ViewModelInstanceViewModel>();
+#ifdef WITH_RIVE_TOOLS
+    viewModelInstanceViewModel->onChanged(vmiViewModelCallback);
+#endif
+    return viewModelInstanceViewModel;
 }
 
 EXPORT void setViewModelInstanceAdvanced(
@@ -4841,7 +5136,8 @@ EXPORT void initBindingCallbacks(
     ViewModelUpdateSymbolListIndex viewModelUpdateSymbolListIndex,
     ViewModelUpdateAsset viewModelUpdateAsset,
     ViewModelUpdateArtboard viewModelUpdateArtboard,
-    ViewModelUpdateList viewModelUpdateList)
+    ViewModelUpdateList viewModelUpdateList,
+    ViewModelUpdateViewModel viewModelUpdateViewModel)
 {
     g_viewModelUpdateNumber = viewModelUpdateNumber;
     g_viewModelUpdateBoolean = viewModelUpdateBoolean;
@@ -4853,6 +5149,7 @@ EXPORT void initBindingCallbacks(
     g_viewModelUpdateAsset = viewModelUpdateAsset;
     g_viewModelUpdateArtboard = viewModelUpdateArtboard;
     g_viewModelUpdateList = viewModelUpdateList;
+    g_viewModelUpdateViewModel = viewModelUpdateViewModel;
 }
 
 #ifdef WITH_RIVE_WORKER
@@ -5938,6 +6235,756 @@ static void freeViewModelInstanceSerializedDataWasm(
 }
 #endif
 
+// =============================================================================
+// FocusNode and FocusManager FFI
+// =============================================================================
+
+#include "dart_focus_node.hpp"
+#include "rive/input/focus_manager.hpp"
+
+using rive_native::DartFocusCallback;
+using rive_native::DartFocusNode;
+using rive_native::DartKeyInputCallback;
+using rive_native::DartTextInputCallback;
+
+// FocusNode creation/disposal
+EXPORT void* makeFocusNode(DartKeyInputCallback keyInput,
+                           DartTextInputCallback textInput,
+                           DartFocusCallback focused,
+                           DartFocusCallback blurred)
+{
+    // DartFocusNode starts with refcount=1, which Dart owns
+    return new DartFocusNode(keyInput, textInput, focused, blurred);
+}
+
+// Simple version without callbacks (for WASM where callbacks are handled in JS)
+EXPORT void* makeFocusNodeSimple() { return new DartFocusNode(); }
+
+EXPORT void disposeFocusNode(void* node)
+{
+    if (node == nullptr)
+        return;
+    // Unref instead of delete - the node may still be held by FocusManager
+    static_cast<DartFocusNode*>(node)->unref();
+}
+
+// FocusNode properties
+// Note: DartFocusNode IS a FocusNode, so we cast directly
+EXPORT void focusNodeSetCanFocus(void* node, bool value)
+{
+    if (node == nullptr)
+        return;
+    static_cast<DartFocusNode*>(node)->canFocus(value);
+}
+
+EXPORT bool focusNodeCanFocus(void* node)
+{
+    if (node == nullptr)
+        return false;
+    return static_cast<DartFocusNode*>(node)->canFocus();
+}
+
+EXPORT void focusNodeSetCanTouch(void* node, bool value)
+{
+    if (node == nullptr)
+        return;
+    static_cast<DartFocusNode*>(node)->canTouch(value);
+}
+
+EXPORT bool focusNodeCanTouch(void* node)
+{
+    if (node == nullptr)
+        return false;
+    return static_cast<DartFocusNode*>(node)->canTouch();
+}
+
+EXPORT void focusNodeSetCanTraverse(void* node, bool value)
+{
+    if (node == nullptr)
+        return;
+    static_cast<DartFocusNode*>(node)->canTraverse(value);
+}
+
+#ifdef WITH_RIVE_TOOLS
+EXPORT void focusNodeSetIsCollapsed(void* node, bool value)
+{
+    if (node == nullptr)
+        return;
+    static_cast<DartFocusNode*>(node)->isCollapsed(value);
+}
+#endif
+
+EXPORT bool focusNodeCanTraverse(void* node)
+{
+    if (node == nullptr)
+        return false;
+    return static_cast<DartFocusNode*>(node)->canTraverse();
+}
+
+EXPORT void focusNodeSetTabIndex(void* node, int value)
+{
+    if (node == nullptr)
+        return;
+    static_cast<DartFocusNode*>(node)->tabIndex(value);
+}
+
+EXPORT int focusNodeTabIndex(void* node)
+{
+    if (node == nullptr)
+        return 0;
+    return static_cast<DartFocusNode*>(node)->tabIndex();
+}
+
+EXPORT void focusNodeSetEdgeBehavior(void* node, uint8_t edgeBehavior)
+{
+    if (node == nullptr)
+        return;
+    static_cast<DartFocusNode*>(node)->edgeBehavior(
+        static_cast<rive::EdgeBehavior>(edgeBehavior));
+}
+
+EXPORT uint8_t focusNodeGetEdgeBehavior(void* node)
+{
+    if (node == nullptr)
+        return 0;
+    return static_cast<uint8_t>(
+        static_cast<DartFocusNode*>(node)->edgeBehavior());
+}
+
+// FocusNode world bounds (for directional navigation)
+// Bounds are stored directly on FocusNode and updated during update cycle
+EXPORT void focusNodeSetWorldBounds(void* node,
+                                    float minX,
+                                    float minY,
+                                    float maxX,
+                                    float maxY)
+{
+    if (node == nullptr)
+        return;
+    static_cast<DartFocusNode*>(node)->worldBounds(
+        rive::AABB(minX, minY, maxX, maxY));
+}
+
+EXPORT void focusNodeClearWorldBounds(void* node)
+{
+    if (node == nullptr)
+        return;
+    static_cast<DartFocusNode*>(node)->clearWorldBounds();
+}
+
+// FocusNode name (for debugging)
+EXPORT const char* focusNodeGetName(void* node)
+{
+    if (node == nullptr)
+        return "";
+    return static_cast<DartFocusNode*>(node)->name().c_str();
+}
+
+EXPORT void focusNodeSetName(void* node, const char* name)
+{
+    if (node == nullptr)
+        return;
+    static_cast<DartFocusNode*>(node)->name(name ? name : "");
+}
+
+// FocusManager creation/disposal
+EXPORT void* makeFocusManager() { return new rive::FocusManager(); }
+
+EXPORT void disposeFocusManager(void* manager)
+{
+    std::lock_guard<std::mutex> lock(g_deleteMutex);
+    auto* fm = static_cast<rive::FocusManager*>(manager);
+#if defined(__EMSCRIPTEN__) && defined(WITH_RIVE_TOOLS)
+    // Clean up WASM callback maps
+    g_focusChangedCallbacksWasm.erase(fm);
+    g_scrollIntoViewCallbacksWasm.erase(fm);
+#endif
+    delete fm;
+}
+
+// FocusManager - focus state
+EXPORT void* focusManagerGetPrimaryFocus(void* manager)
+{
+    if (manager == nullptr)
+        return nullptr;
+    return static_cast<rive::FocusManager*>(manager)->primaryFocus().get();
+}
+
+#ifdef __EMSCRIPTEN__
+/// WASM-specific struct to return primary focus bounds
+struct FocusBoundsResult
+{
+    int valid; // 1 if bounds are valid, 0 otherwise
+    float minX;
+    float minY;
+    float maxX;
+    float maxY;
+};
+
+/// Get the world bounds of the primary focus (WASM version).
+/// Returns a struct with valid flag and bounds.
+EXPORT FocusBoundsResult focusManagerGetPrimaryFocusBounds(void* manager)
+{
+    FocusBoundsResult result = {0, 0, 0, 0, 0};
+    if (manager == nullptr)
+        return result;
+    rive::AABB bounds;
+    if (!static_cast<rive::FocusManager*>(manager)->primaryFocusBounds(bounds))
+    {
+        return result;
+    }
+    result.valid = 1;
+    result.minX = bounds.minX;
+    result.minY = bounds.minY;
+    result.maxX = bounds.maxX;
+    result.maxY = bounds.maxY;
+    return result;
+}
+#else
+/// Get the world bounds of the primary focus.
+/// Returns true if bounds are valid. Outputs are set only if true.
+EXPORT bool focusManagerGetPrimaryFocusBounds(void* manager,
+                                              float* outMinX,
+                                              float* outMinY,
+                                              float* outMaxX,
+                                              float* outMaxY)
+{
+    if (manager == nullptr)
+        return false;
+    rive::AABB bounds;
+    if (!static_cast<rive::FocusManager*>(manager)->primaryFocusBounds(bounds))
+    {
+        return false;
+    }
+    *outMinX = bounds.minX;
+    *outMinY = bounds.minY;
+    *outMaxX = bounds.maxX;
+    *outMaxY = bounds.maxY;
+    return true;
+}
+#endif
+
+/// Get the root artboard that contains the primary focus (walks up nested
+/// chain). Returns nullptr if there is no focus or the focusable has no
+/// artboard.
+EXPORT void* focusManagerGetPrimaryFocusArtboard(void* manager)
+{
+    if (manager == nullptr)
+        return nullptr;
+    return static_cast<rive::FocusManager*>(manager)->primaryFocusArtboard();
+}
+
+/// Get the immediate artboard that contains the primary focus (no walk-up).
+/// Returns nullptr if there is no focus or the focusable has no artboard.
+EXPORT void* focusManagerGetPrimaryFocusImmediateArtboard(void* manager)
+{
+    if (manager == nullptr)
+        return nullptr;
+    return static_cast<rive::FocusManager*>(manager)
+        ->primaryFocusImmediateArtboard();
+}
+
+/// Check if the primary focus is inside the given artboard (or a nested
+/// artboard within it). Returns true if the focused element's artboard is the
+/// given artboard or a descendant of it.
+EXPORT bool focusManagerIsFocusInArtboard(void* manager, void* artboard)
+{
+    if (manager == nullptr || artboard == nullptr)
+        return false;
+
+    auto* focusManager = static_cast<rive::FocusManager*>(manager);
+    auto* targetArtboard = static_cast<rive::Artboard*>(artboard);
+
+    // Get the immediate artboard containing the focused element
+    rive::Artboard* focusedArtboard =
+        focusManager->primaryFocusImmediateArtboard();
+    if (focusedArtboard == nullptr)
+        return false;
+
+    // Walk up the chain from the focused artboard to see if we hit the target
+    rive::Artboard* current = focusedArtboard;
+    while (current != nullptr)
+    {
+        if (current == targetArtboard)
+            return true;
+
+        // Move to parent artboard via host
+        if (current->host() == nullptr)
+            break;
+        current = current->host()->parentArtboard();
+    }
+
+    return false;
+}
+
+EXPORT void focusManagerSetFocus(void* manager, void* node)
+{
+    if (manager == nullptr)
+        return;
+    auto* focusManager = static_cast<rive::FocusManager*>(manager);
+    if (node == nullptr)
+    {
+        focusManager->clearFocus();
+    }
+    else
+    {
+        focusManager->setFocus(
+            rive::ref_rcp(static_cast<DartFocusNode*>(node)));
+    }
+}
+
+EXPORT void focusManagerClearFocus(void* manager)
+{
+    if (manager == nullptr)
+        return;
+    static_cast<rive::FocusManager*>(manager)->clearFocus();
+}
+
+EXPORT bool focusManagerHasFocus(void* manager, void* node)
+{
+    if (manager == nullptr || node == nullptr)
+        return false;
+    return static_cast<rive::FocusManager*>(manager)->hasFocus(
+        rive::ref_rcp(static_cast<DartFocusNode*>(node)));
+}
+
+EXPORT bool focusManagerHasPrimaryFocus(void* manager, void* node)
+{
+    if (manager == nullptr || node == nullptr)
+        return false;
+    return static_cast<rive::FocusManager*>(manager)->hasPrimaryFocus(
+        rive::ref_rcp(static_cast<DartFocusNode*>(node)));
+}
+
+EXPORT void dropFocusIfFocusTargetHidden(void* manager)
+{
+    if (manager == nullptr)
+    {
+        return;
+    }
+    static_cast<rive::FocusManager*>(manager)->dropFocusIfFocusTargetHidden();
+}
+
+// FocusManager - hierarchy
+EXPORT void focusManagerAddChild(void* manager, void* parent, void* child)
+{
+    if (manager == nullptr || child == nullptr)
+        return;
+    auto* focusManager = static_cast<rive::FocusManager*>(manager);
+    rive::rcp<rive::FocusNode> parentNode =
+        parent ? rive::ref_rcp(static_cast<DartFocusNode*>(parent)) : nullptr;
+    rive::rcp<rive::FocusNode> childNode =
+        rive::ref_rcp(static_cast<DartFocusNode*>(child));
+    focusManager->addChild(parentNode, childNode);
+}
+
+EXPORT void focusManagerRemoveChild(void* manager, void* child)
+{
+    if (manager == nullptr || child == nullptr)
+        return;
+    auto* focusManager = static_cast<rive::FocusManager*>(manager);
+    rive::rcp<rive::FocusNode> childNode =
+        rive::ref_rcp(static_cast<DartFocusNode*>(child));
+    focusManager->removeChild(childNode);
+}
+
+// FocusManager - traversal
+EXPORT bool focusManagerFocusNext(void* manager)
+{
+    if (manager == nullptr)
+        return false;
+    return static_cast<rive::FocusManager*>(manager)->focusNext();
+}
+
+EXPORT bool focusManagerFocusPrevious(void* manager)
+{
+    if (manager == nullptr)
+        return false;
+    return static_cast<rive::FocusManager*>(manager)->focusPrevious();
+}
+
+// FocusManager - directional navigation
+EXPORT bool focusManagerFocusLeft(void* manager)
+{
+    if (manager == nullptr)
+        return false;
+    return static_cast<rive::FocusManager*>(manager)->focusLeft();
+}
+
+EXPORT bool focusManagerFocusRight(void* manager)
+{
+    if (manager == nullptr)
+        return false;
+    return static_cast<rive::FocusManager*>(manager)->focusRight();
+}
+
+EXPORT bool focusManagerFocusUp(void* manager)
+{
+    if (manager == nullptr)
+        return false;
+    return static_cast<rive::FocusManager*>(manager)->focusUp();
+}
+
+EXPORT bool focusManagerFocusDown(void* manager)
+{
+    if (manager == nullptr)
+        return false;
+    return static_cast<rive::FocusManager*>(manager)->focusDown();
+}
+
+// FocusManager - input routing
+EXPORT bool focusManagerKeyInput(void* manager,
+                                 uint16_t key,
+                                 uint8_t modifiers,
+                                 bool isPressed,
+                                 bool isRepeat)
+{
+    if (manager == nullptr)
+        return false;
+    return static_cast<rive::FocusManager*>(manager)->keyInput(
+        static_cast<rive::Key>(key),
+        static_cast<rive::KeyModifiers>(modifiers),
+        isPressed,
+        isRepeat);
+}
+
+EXPORT bool focusManagerTextInput(void* manager, const char* text)
+{
+    if (manager == nullptr || text == nullptr)
+        return false;
+    return static_cast<rive::FocusManager*>(manager)->textInput(text);
+}
+
+#ifdef WITH_RIVE_TOOLS
+using FocusChangedCallback = void (*)();
+EXPORT void focusManagerSetFocusChangedCallback(void* manager,
+                                                FocusChangedCallback callback)
+{
+    if (manager == nullptr)
+        return;
+    static_cast<rive::FocusManager*>(manager)->setFocusChangedCallback(
+        callback);
+}
+
+// Callback for scroll-into-view requests from Dart-mounted artboards.
+// Parameters passed to Dart:
+// - minX, minY, maxX, maxY: world bounds of the focused element
+// - rootArtboard: pointer to the root artboard (host == null)
+using ScrollIntoViewCallback = void (*)(float minX,
+                                        float minY,
+                                        float maxX,
+                                        float maxY,
+                                        void* rootArtboard);
+
+// Static thunk that converts AABB to individual floats for Dart FFI
+static ScrollIntoViewCallback g_scrollIntoViewCallback = nullptr;
+static void scrollIntoViewThunk(const rive::AABB& bounds,
+                                rive::Artboard* rootArtboard)
+{
+    if (g_scrollIntoViewCallback)
+    {
+        g_scrollIntoViewCallback(bounds.minX,
+                                 bounds.minY,
+                                 bounds.maxX,
+                                 bounds.maxY,
+                                 static_cast<void*>(rootArtboard));
+    }
+}
+
+#if defined(__EMSCRIPTEN__)
+// =============================================================================
+// WASM FocusNode callbacks - per-node emscripten::val callback storage
+// =============================================================================
+
+struct WasmFocusNodeCallbacks
+{
+    emscripten::val onKeyInput = emscripten::val::null();
+    emscripten::val onTextInput = emscripten::val::null();
+    emscripten::val onFocused = emscripten::val::null();
+    emscripten::val onBlurred = emscripten::val::null();
+};
+
+std::unordered_map<void*, WasmFocusNodeCallbacks> g_focusNodeCallbacksWasm;
+
+// Static thunks that look up the per-node JS callback and invoke it
+static bool wasmKeyInputThunk(void* nodePtr,
+                              uint16_t key,
+                              uint8_t modifiers,
+                              bool isPressed,
+                              bool isRepeat)
+{
+    auto it = g_focusNodeCallbacksWasm.find(nodePtr);
+    if (it != g_focusNodeCallbacksWasm.end() &&
+        !it->second.onKeyInput.isNull() && !it->second.onKeyInput.isUndefined())
+    {
+        return it->second
+            .onKeyInput(static_cast<int>(key),
+                        static_cast<int>(modifiers),
+                        isPressed,
+                        isRepeat)
+            .as<bool>();
+    }
+    return false;
+}
+
+static bool wasmTextInputThunk(void* nodePtr, const char* text)
+{
+    auto it = g_focusNodeCallbacksWasm.find(nodePtr);
+    if (it != g_focusNodeCallbacksWasm.end() &&
+        !it->second.onTextInput.isNull() &&
+        !it->second.onTextInput.isUndefined())
+    {
+        return it->second.onTextInput(std::string(text)).as<bool>();
+    }
+    return false;
+}
+
+static void wasmFocusedThunk(void* nodePtr)
+{
+    auto it = g_focusNodeCallbacksWasm.find(nodePtr);
+    if (it != g_focusNodeCallbacksWasm.end() &&
+        !it->second.onFocused.isNull() && !it->second.onFocused.isUndefined())
+    {
+        it->second.onFocused();
+    }
+}
+
+static void wasmBlurredThunk(void* nodePtr)
+{
+    auto it = g_focusNodeCallbacksWasm.find(nodePtr);
+    if (it != g_focusNodeCallbacksWasm.end() &&
+        !it->second.onBlurred.isNull() && !it->second.onBlurred.isUndefined())
+    {
+        it->second.onBlurred();
+    }
+}
+
+WasmPtr makeFocusNodeWasm(emscripten::val onKeyInput,
+                          emscripten::val onTextInput,
+                          emscripten::val onFocused,
+                          emscripten::val onBlurred)
+{
+    bool hasCallbacks = (!onKeyInput.isNull() && !onKeyInput.isUndefined()) ||
+                        (!onTextInput.isNull() && !onTextInput.isUndefined()) ||
+                        (!onFocused.isNull() && !onFocused.isUndefined()) ||
+                        (!onBlurred.isNull() && !onBlurred.isUndefined());
+
+    DartFocusNode* node;
+    if (hasCallbacks)
+    {
+        node = new DartFocusNode(wasmKeyInputThunk,
+                                 wasmTextInputThunk,
+                                 wasmFocusedThunk,
+                                 wasmBlurredThunk);
+        g_focusNodeCallbacksWasm[static_cast<void*>(node)] = {
+            onKeyInput,
+            onTextInput,
+            onFocused,
+            onBlurred,
+        };
+    }
+    else
+    {
+        node = new DartFocusNode();
+    }
+    return reinterpret_cast<WasmPtr>(node);
+}
+
+// Clean up WASM callbacks when a FocusNode is disposed
+static void disposeFocusNodeWasm(WasmPtr nodePtr)
+{
+    auto* node = reinterpret_cast<DartFocusNode*>(nodePtr);
+    if (node == nullptr)
+        return;
+    g_focusNodeCallbacksWasm.erase(static_cast<void*>(node));
+    node->unref();
+}
+
+// =============================================================================
+// WASM FocusManager callbacks
+// =============================================================================
+
+// WASM-specific: Store per-manager emscripten::val callbacks for focus-changed
+// Uses broadcast approach like FFI - all managers share the same static thunk
+std::unordered_map<rive::FocusManager*, emscripten::val>
+    g_focusChangedCallbacksWasm;
+
+// Broadcast thunk: calls ALL registered callbacks when any manager fires
+// This matches FFI behavior where a single trampoline notifies all managers
+static void focusChangedBroadcastThunk()
+{
+    for (auto& pair : g_focusChangedCallbacksWasm)
+    {
+        if (!pair.second.isNull() && !pair.second.isUndefined())
+        {
+            pair.second();
+        }
+    }
+}
+
+void focusManagerSetFocusChangedCallbackWasm(WasmPtr managerPtr,
+                                             emscripten::val callback)
+{
+    auto* manager = reinterpret_cast<rive::FocusManager*>(managerPtr);
+    if (manager == nullptr)
+        return;
+
+    if (!callback.isNull() && !callback.isUndefined())
+    {
+        g_focusChangedCallbacksWasm[manager] = callback;
+        // All managers share the same broadcast thunk
+        manager->setFocusChangedCallback(focusChangedBroadcastThunk);
+    }
+    else
+    {
+        g_focusChangedCallbacksWasm.erase(manager);
+        manager->setFocusChangedCallback(nullptr);
+    }
+}
+
+// WASM-specific: Store per-manager emscripten::val callbacks for
+// scroll-into-view
+std::unordered_map<rive::FocusManager*, emscripten::val>
+    g_scrollIntoViewCallbacksWasm;
+
+// Broadcast thunk for scroll-into-view
+static void scrollIntoViewBroadcastThunk(const rive::AABB& bounds,
+                                         rive::Artboard* rootArtboard)
+{
+    for (auto& pair : g_scrollIntoViewCallbacksWasm)
+    {
+        if (!pair.second.isNull() && !pair.second.isUndefined())
+        {
+            pair.second(bounds.minX,
+                        bounds.minY,
+                        bounds.maxX,
+                        bounds.maxY,
+                        reinterpret_cast<uintptr_t>(rootArtboard));
+        }
+    }
+}
+
+void focusManagerSetScrollIntoViewCallback(WasmPtr managerPtr,
+                                           emscripten::val callback)
+{
+    auto* manager = reinterpret_cast<rive::FocusManager*>(managerPtr);
+    if (manager == nullptr)
+        return;
+
+    if (!callback.isNull() && !callback.isUndefined())
+    {
+        g_scrollIntoViewCallbacksWasm[manager] = callback;
+        manager->setScrollIntoViewCallback(scrollIntoViewBroadcastThunk);
+    }
+    else
+    {
+        g_scrollIntoViewCallbacksWasm.erase(manager);
+        manager->setScrollIntoViewCallback(nullptr);
+    }
+}
+#else
+EXPORT void focusManagerSetScrollIntoViewCallback(
+    void* manager,
+    ScrollIntoViewCallback callback)
+{
+    if (manager == nullptr)
+        return;
+    g_scrollIntoViewCallback = callback;
+    static_cast<rive::FocusManager*>(manager)->setScrollIntoViewCallback(
+        callback != nullptr ? scrollIntoViewThunk : nullptr);
+}
+#endif
+#else
+using ScrollIntoViewCallback = void (*)(float minX,
+                                        float minY,
+                                        float maxX,
+                                        float maxY,
+                                        void* rootArtboard);
+EXPORT void focusManagerSetScrollIntoViewCallback(
+    void* manager,
+    ScrollIntoViewCallback callback)
+{}
+using FocusChangedCallback = void (*)();
+EXPORT void focusManagerSetFocusChangedCallback(void* manager,
+                                                FocusChangedCallback callback)
+{}
+#endif
+
+#ifdef WITH_RIVE_TOOLS
+// Artboard - root FocusData access
+// These allow Dart to get FocusNodes from native FocusData objects in an
+// artboard
+
+EXPORT SizeType artboardRootFocusDataCount(WrappedArtboard* wrappedArtboard)
+{
+    if (wrappedArtboard == nullptr)
+        return 0;
+    return wrappedArtboard->artboard()->rootFocusDataCount();
+}
+
+EXPORT void* artboardRootFocusNodeAt(WrappedArtboard* wrappedArtboard,
+                                     SizeType index)
+{
+    if (wrappedArtboard == nullptr)
+        return nullptr;
+    auto* focusData = wrappedArtboard->artboard()->rootFocusDataAt(index);
+    if (focusData == nullptr)
+        return nullptr;
+    // Return the raw FocusNode pointer - it's compatible with FocusNode* FFI
+    return focusData->focusNode().get();
+}
+
+// Set an external parent FocusNode on an artboard.
+// This allows focus nodes in nested artboards to be children of a FocusData
+// in the host artboard, even across artboard boundaries.
+EXPORT void artboardSetExternalParentFocusNode(WrappedArtboard* wrappedArtboard,
+                                               void* focusNode)
+{
+    if (wrappedArtboard == nullptr)
+        return;
+    rive::rcp<rive::FocusNode> node =
+        focusNode ? rive::ref_rcp(static_cast<DartFocusNode*>(focusNode))
+                  : nullptr;
+    wrappedArtboard->artboard()->setExternalParentFocusNode(std::move(node));
+}
+#endif
+
+// Build focus tree for an artboard using a parent FocusNode.
+// The FocusManager is derived from the parent node's manager() reference.
+// This is a convenience method for nested artboards.
+EXPORT void artboardBuildFocusTreeWithParent(WrappedArtboard* wrappedArtboard,
+                                             void* parentFocusNodePtr)
+{
+    if (wrappedArtboard == nullptr)
+        return;
+    rive::rcp<rive::FocusNode> parentNode =
+        parentFocusNodePtr
+            ? rive::ref_rcp(static_cast<DartFocusNode*>(parentFocusNodePtr))
+            : nullptr;
+    wrappedArtboard->artboard()->buildFocusTree(parentNode);
+}
+
+// Get the focus manager from a state machine instance.
+// This returns the active focus manager (external if set, internal otherwise).
+EXPORT FocusManager* stateMachineGetFocusManager(
+    WrappedStateMachine* wrappedMachine)
+{
+    if (wrappedMachine == nullptr)
+        return nullptr;
+    return wrappedMachine->stateMachine()->focusManager();
+}
+
+// Set an external focus manager on a state machine instance.
+// This allows nested artboards to share focus with their parent.
+EXPORT void stateMachineSetExternalFocusManager(
+    WrappedStateMachine* wrappedMachine,
+    FocusManager* focusManager)
+{
+    if (wrappedMachine == nullptr)
+        return;
+    wrappedMachine->stateMachine()->setExternalFocusManager(focusManager);
+}
+
 #ifdef __EMSCRIPTEN__
 EMSCRIPTEN_BINDINGS(RiveBinding)
 {
@@ -5963,7 +7010,7 @@ EMSCRIPTEN_BINDINGS(RiveBinding)
     function("setArtboardRootTransformCallback",
              &setArtboardRootTransformCallback);
     function("artboardGetAllTextRuns", &artboardGetAllTextRuns);
-
+#ifdef WITH_RIVE_TOOLS
     // Profiler functions
     function("profilerStart", &profilerStart);
     function("profilerStop", &profilerStop);
@@ -5975,6 +7022,31 @@ EMSCRIPTEN_BINDINGS(RiveBinding)
     function("profilerGetBufferSize", &profilerGetBufferSize);
     function("profilerFreeBuffer", &profilerFreeBuffer);
     function("profilerEndFrame", &profilerEndFrame);
+
+    // FocusNode creation with WASM callbacks
+    function("makeFocusNodeWasm", &makeFocusNodeWasm);
+    function("disposeFocusNodeWasm", &disposeFocusNodeWasm);
+
+    // FocusManager functions that need EMSCRIPTEN_BINDINGS
+    // (callback takes emscripten::val, bounds returns value_object struct)
+
+    function("focusManagerSetFocusChangedCallback",
+             &focusManagerSetFocusChangedCallbackWasm);
+    function("focusManagerSetScrollIntoViewCallback",
+             &focusManagerSetScrollIntoViewCallback);
+    function("focusManagerGetPrimaryFocusBounds",
+             &focusManagerGetPrimaryFocusBounds,
+             allow_raw_pointers());
+
+    // FocusBoundsResult struct for WASM (used by
+    // focusManagerGetPrimaryFocusBounds)
+    value_object<FocusBoundsResult>("FocusBoundsResult")
+        .field("valid", &FocusBoundsResult::valid)
+        .field("minX", &FocusBoundsResult::minX)
+        .field("minY", &FocusBoundsResult::minY)
+        .field("maxX", &FocusBoundsResult::maxX)
+        .field("maxY", &FocusBoundsResult::maxY);
+#endif
 
     value_object<TextRunArrayResult>("TextRunArrayResult")
         .field("array", &TextRunArrayResult::array)
@@ -5990,14 +7062,18 @@ EMSCRIPTEN_BINDINGS(RiveBinding)
         .field("name", &FlutterRuntimeCustomProperty::name)
         .field("type", &FlutterRuntimeCustomProperty::type);
 
-#if defined(WITH_RIVE_TOOLS)
+#ifdef WITH_RIVE_TOOLS
     value_object<ViewModelInstanceBufferResponse>(
         "ViewModelInstanceBufferResponse")
         .field("data", &ViewModelInstanceBufferResponse::data)
         .field("size", &ViewModelInstanceBufferResponse::size);
     function("requestSerializedViewModelInstanceWasm",
-             &requestSerializedViewModelInstanceWasm,
-             allow_raw_pointers());
+             optional_override([](WasmPtr file, WasmPtr viewModelInstance)
+                                   -> ViewModelInstanceBufferResponse {
+                 return requestSerializedViewModelInstanceWasm(
+                     (rive::File*)file,
+                     (rive::ViewModelInstance*)viewModelInstance);
+             }));
     function("freeViewModelInstanceSerializedDataWasm",
              &freeViewModelInstanceSerializedDataWasm);
 #endif
