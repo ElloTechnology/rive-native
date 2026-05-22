@@ -22,7 +22,75 @@
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
-std::mutex flutterMutex;
+std::recursive_mutex flutterMutex;
+
+// ----- JVM bridge for the RiveRenderTexture.scheduleFrame() wrapper -----
+// Set in JNI_OnLoad. Used by AndroidRenderTexture::endFrame to wake Flutter's
+// compositor after a successful eglSwapBuffers. We can NOT call
+// SurfaceProducer.scheduleFrame() directly from the bg worker — it is
+// annotated @UiThread and throws RuntimeException off the main thread. The
+// Kotlin RiveRenderTexture.scheduleFrame() method posts a Runnable to the
+// main-Looper Handler that invokes producer.scheduleFrame on the UI thread,
+// with a coalescing flag so a 60 Hz bg worker only enqueues one pending
+// post at a time.
+//
+// Without this wake the Flutter compositor stays idle even though the
+// BufferQueue holds a new frame, leaving `vsync_p95` at 50-140ms on Tier-1
+// Android.
+static JavaVM* g_javaVM = nullptr;
+static jclass g_riveRenderTextureClass = nullptr;
+static jmethodID g_scheduleFrameMid = nullptr;
+
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/)
+{
+    g_javaVM = vm;
+    JNIEnv* env = nullptr;
+    if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK)
+    {
+        return JNI_VERSION_1_6;
+    }
+    jclass localCls =
+        env->FindClass("app/rive/rive_native/RiveRenderTexture");
+    if (localCls != nullptr)
+    {
+        g_riveRenderTextureClass =
+            reinterpret_cast<jclass>(env->NewGlobalRef(localCls));
+        env->DeleteLocalRef(localCls);
+        g_scheduleFrameMid =
+            env->GetMethodID(g_riveRenderTextureClass,
+                             "scheduleFrame",
+                             "()V");
+        if (g_scheduleFrameMid == nullptr)
+        {
+            env->ExceptionClear();
+            LOGW("RiveRenderTexture.scheduleFrame() not found — bg-thread "
+                 "compositor wake will be unavailable.");
+        }
+    }
+    else
+    {
+        env->ExceptionClear();
+        LOGW("RiveRenderTexture class not found — bg-thread compositor wake "
+             "will be unavailable.");
+    }
+    return JNI_VERSION_1_6;
+}
+
+// Per-thread cached JNIEnv* for the Rive bg worker. Attached as a daemon so
+// the thread does not need to detach before exit. Returns nullptr if the JVM
+// pointer is null (JNI_OnLoad never ran — should be impossible in practice).
+static JNIEnv* getBgThreadJniEnv()
+{
+    if (g_javaVM == nullptr) return nullptr;
+    thread_local JNIEnv* env = nullptr;
+    if (env != nullptr) return env;
+    JavaVMAttachArgs args = {JNI_VERSION_1_6, "RiveBgWorker", nullptr};
+    if (g_javaVM->AttachCurrentThreadAsDaemon(&env, &args) != JNI_OK)
+    {
+        env = nullptr;
+    }
+    return env;
+}
 
 #define EGL_ERR_CHECK() _check_egl_error(__FILE__, __LINE__)
 
@@ -222,6 +290,32 @@ public:
     {
         LOGD("EGLThreadState getting destroyed! 🧨");
 
+        // Destruction order matters. Members get destructed in reverse
+        // declaration order AFTER this body returns, so `m_renderContext`
+        // (`rive::gpu::RenderContextGLImpl::~RenderContextGLImpl`) would
+        // otherwise run after the `eglDestroyContext` / `eglTerminate`
+        // calls below — calling `glDeleteTextures` (and the rest of Rive's
+        // GL teardown) against a destroyed GL context. The GLES driver
+        // null-dereferences in that path during `__cxa_thread_finalize`,
+        // crashing the bg worker thread with SIGSEGV inside
+        // `__cxa_thread_finalize`.
+        //
+        // Make our pbuffer surface current so the Rive render-context
+        // destructor sees a valid GL context, then tear it down first.
+        // After that the EGL surface/context/display can be safely
+        // destroyed in reverse-creation order.
+        if (m_context != EGL_NO_CONTEXT &&
+            m_display != EGL_NO_DISPLAY &&
+            m_backgroundSurface != EGL_NO_SURFACE)
+        {
+            eglMakeCurrent(m_display,
+                           m_backgroundSurface,
+                           m_backgroundSurface,
+                           m_context);
+            EGL_ERR_CHECK();
+        }
+        m_renderContext.reset();
+
         if (m_context != EGL_NO_CONTEXT)
         {
             eglDestroyContext(m_display, m_context);
@@ -268,7 +362,7 @@ public:
         EGL_ERR_CHECK();
     }
 
-    void makeCurrent(EGLSurface eglSurface)
+    bool makeCurrent(EGLSurface eglSurface)
     {
         if (eglSurface == m_currentSurface)
         {
@@ -278,17 +372,18 @@ public:
         if (eglSurface == EGL_NO_SURFACE)
         {
             LOGE("Cannot make EGL_NO_SURFACE current");
-            return;
+            return false;
         }
 
         if (!eglMakeCurrent(m_display, eglSurface, eglSurface, m_context))
         {
             LOGE("eglMakeCurrent failed");
             EGL_ERR_CHECK();
-            return;
+            return false;
         }
 
         m_currentSurface = eglSurface;
+        return true;
     }
 
     void swapBuffers()
@@ -372,12 +467,25 @@ public:
                 return false;
             }
 
-            threadState->makeCurrent(m_eglSurface);
+            if (!threadState->makeCurrent(m_eglSurface))
+            {
+                return false;
+            }
             auto renderContext = threadState->renderContext();
             if (renderContext == nullptr)
             {
-                LOGW("Rive AndroidRenderTexture Rive Renderer (PLS) not "
-                     "supported");
+                LOGE("Rive AndroidRenderTexture: Renderer (PLS) NOT "
+                     "supported on this device (surface=%dx%d). The "
+                     "threaded path will silently no-op every render "
+                     "cycle from now on — m_plsRenderer stays null, "
+                     "makeRenderer() returns null, the bg callback hits "
+                     "its 'makeRenderer returned null' branch and marks "
+                     "fatal. Only viable mitigation is to disable "
+                     "threaded rendering for this device (ThreadedRive"
+                     "BenchMode.forceSyncRendering, or the throttle "
+                     "config disableThreadedRiveAdvance flag).",
+                     m_width,
+                     m_height);
                 return true; // PLS was not supported.
             }
             int width = ANativeWindow_getWidth(m_surfaceWindow);
@@ -434,16 +542,56 @@ public:
             renderContext->static_impl_cast<rive::gpu::RenderContextGLImpl>();
         plsGL->invalidateGLState();
 
-        threadState->makeCurrent(m_eglSurface);
+        if (!threadState->makeCurrent(m_eglSurface))
+        {
+            return false;
+        }
 
         renderContext->flush({.renderTarget = m_renderTarget.get()});
         threadState->swapBuffers();
 
         plsGL->unbindGLInternalResources();
+
+        // Wake Flutter's compositor. eglSwapBuffers alone is insufficient on
+        // some Impeller GLES builds — the SurfaceProducer's underlying
+        // BufferQueue signals the engine, but the engine doesn't always
+        // follow up with a frame request without an explicit scheduleFrame.
+        // Calling it from the bg thread is safe; SurfaceProducer.scheduleFrame
+        // posts to the Flutter platform thread internally.
+        if (m_surfaceProducer != nullptr && g_scheduleFrameMid != nullptr)
+        {
+            if (JNIEnv* env = getBgThreadJniEnv())
+            {
+                env->CallVoidMethod(m_surfaceProducer, g_scheduleFrameMid);
+                if (env->ExceptionCheck())
+                {
+                    env->ExceptionDescribe();
+                    env->ExceptionClear();
+                }
+            }
+        }
+
         return true;
     }
 
     void scheduleDestruction() { m_scheduledDestruction = true; }
+
+    // Stores a Java global ref to the SurfaceProducer driving this texture.
+    // Called once from the JNI createRiveRenderer entry point. The endFrame
+    // callback invokes SurfaceProducer.scheduleFrame() through this ref to
+    // wake Flutter's compositor after each successful swap.
+    void setSurfaceProducer(JNIEnv* env, jobject producer)
+    {
+        if (m_surfaceProducer != nullptr)
+        {
+            env->DeleteGlobalRef(m_surfaceProducer);
+            m_surfaceProducer = nullptr;
+        }
+        if (producer != nullptr)
+        {
+            m_surfaceProducer = env->NewGlobalRef(producer);
+        }
+    }
 
 private:
     ANativeWindow* m_surfaceWindow;
@@ -455,17 +603,31 @@ private:
     std::unique_ptr<rive::RiveRenderer> m_plsRenderer;
     bool m_scheduledDestruction = false;
 
+    // Java global ref to the SurfaceProducer this texture writes to.
+    // Allocated in setSurfaceProducer, released in releaseSurfaceProducer.
+    // Read from endFrame to invoke SurfaceProducer.scheduleFrame().
+    jobject m_surfaceProducer = nullptr;
+
 public:
-    static std::unique_ptr<EGLThreadState> threadState;
+    static thread_local std::unique_ptr<EGLThreadState> threadState;
 
     rive::Renderer* renderer() { return m_plsRenderer.get(); }
+
+    void releaseSurfaceProducer(JNIEnv* env)
+    {
+        if (m_surfaceProducer != nullptr && env != nullptr)
+        {
+            env->DeleteGlobalRef(m_surfaceProducer);
+        }
+        m_surfaceProducer = nullptr;
+    }
 };
 
-std::unique_ptr<EGLThreadState> AndroidRenderTexture::threadState;
+thread_local std::unique_ptr<EGLThreadState> AndroidRenderTexture::threadState;
 
 EXPORT rive::Factory* riveFactory()
 {
-    std::unique_lock<std::mutex> lock(flutterMutex);
+    std::unique_lock<std::recursive_mutex> lock(flutterMutex);
     if (!AndroidRenderTexture::threadState)
     {
         AndroidRenderTexture::threadState = std::make_unique<EGLThreadState>();
@@ -496,11 +658,14 @@ EXPORT void Java_app_rive_rive_1native_RiveNativePluginKt_destroyRiveRenderer(
     jclass clazz,
     jlong renderer)
 {
-    std::unique_lock<std::mutex> lock(flutterMutex);
+    std::unique_lock<std::recursive_mutex> lock(flutterMutex);
     if (renderer != 0)
     {
         AndroidRenderTexture* renderTexture =
             reinterpret_cast<AndroidRenderTexture*>(renderer);
+        // Free the SurfaceProducer global ref while we have a valid JNIEnv*;
+        // the destructor doesn't get one and can't clean it up itself.
+        renderTexture->releaseSurfaceProducer(env);
         delete renderTexture;
     }
     else
@@ -509,13 +674,36 @@ EXPORT void Java_app_rive_rive_1native_RiveNativePluginKt_destroyRiveRenderer(
     }
 }
 
+// JNI entry point so the Kotlin RiveRenderTexture can hand its
+// TextureRegistry.SurfaceProducer to the bg-thread render path. After the
+// renderer is created, Kotlin calls this with the same SurfaceProducer that
+// owns the Surface; subsequent endFrame calls invoke SurfaceProducer
+// .scheduleFrame() on it. Passing null clears any previously-set producer.
+EXPORT void
+Java_app_rive_rive_1native_RiveNativePluginKt_setRiveRendererSurfaceProducer(
+    JNIEnv* env,
+    jclass clazz,
+    jlong renderer,
+    jobject surfaceProducer)
+{
+    std::unique_lock<std::recursive_mutex> lock(flutterMutex);
+    if (renderer == 0)
+    {
+        LOGW("JNI: setRiveRendererSurfaceProducer called with null renderer");
+        return;
+    }
+    AndroidRenderTexture* renderTexture =
+        reinterpret_cast<AndroidRenderTexture*>(renderer);
+    renderTexture->setSurfaceProducer(env, surfaceProducer);
+}
+
 EXPORT void
 Java_app_rive_rive_1native_RiveNativePluginKt_markDestroyedRiveRenderer(
     JNIEnv* env,
     jclass clazz,
     jlong renderer)
 {
-    std::unique_lock<std::mutex> lock(flutterMutex);
+    std::unique_lock<std::recursive_mutex> lock(flutterMutex);
     if (renderer != 0)
     {
         AndroidRenderTexture* renderTexture =
@@ -536,7 +724,7 @@ EXPORT bool clear(AndroidRenderTexture* renderTexture,
     {
         return false;
     }
-    std::unique_lock<std::mutex> lock(flutterMutex);
+    std::unique_lock<std::recursive_mutex> lock(flutterMutex);
     return renderTexture->beginFrame(clear, color);
 }
 
@@ -547,7 +735,7 @@ EXPORT bool flush(AndroidRenderTexture* renderTexture, float devicePixelRatio)
         return false;
     }
 
-    std::unique_lock<std::mutex> lock(flutterMutex);
+    std::unique_lock<std::recursive_mutex> lock(flutterMutex);
     return renderTexture->endFrame(devicePixelRatio);
 }
 
@@ -557,6 +745,6 @@ EXPORT rive::Renderer* makeRenderer(AndroidRenderTexture* renderTexture)
     {
         return nullptr;
     }
-    std::unique_lock<std::mutex> lock(flutterMutex);
+    std::unique_lock<std::recursive_mutex> lock(flutterMutex);
     return renderTexture->renderer();
 }

@@ -20,7 +20,16 @@ function m.github(project, tag)
     local dirname = project .. '_' .. tag
     dirname = string.gsub(dirname, '/', '_')
     local dependency_path = dependencies .. '/' .. dirname
-    if not os.isdir(dependency_path) then
+    -- Check for .git rather than just the directory. These deps are tracked
+    -- in the parent repo as gitlinks (mode 160000) with no .gitmodules
+    -- registration, so `git checkout` materializes empty placeholder dirs.
+    -- The original `os.isdir(dependency_path)` check skipped the clone in
+    -- that case and the build died later with cryptic "no such file"
+    -- errors on dep-internal paths (e.g.
+    -- .../glennrp_libpng_libpng16/scripts/pnglibconf.h.prebuilt). Matches
+    -- the same pattern used for premake-core in build_rive.sh.
+    if not os.isdir(dependency_path .. '/.git') then
+        os.rmdir(dependency_path)
         print('Fetching dependency ' .. project .. ' at tag ' .. tag .. '...')
         local gitcmd = 'git -c advice.detachedHead=false -C '
             .. dependencies

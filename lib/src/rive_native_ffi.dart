@@ -79,6 +79,9 @@ base class _NativeRenderTexture extends RenderTexture {
   @override
   Pointer<Void> get nativeTexture => _nativeTexture(_rendererPtr);
 
+  @override
+  Pointer<Void> get nativeRendererPtr => _rendererPtr;
+
   final MethodChannel methodChannel;
   int _textureId = -1;
   Pointer<Void> _rendererPtr = nullptr;
@@ -235,6 +238,9 @@ base class _HeadlessRenderTexture extends RenderTexture {
 
   @override
   dynamic get nativeTexture => nullptr;
+
+  @override
+  Pointer<Void> get nativeRendererPtr => _rendererPtr;
 
   @override
   bool get isReady => _rendererPtr != nullptr;

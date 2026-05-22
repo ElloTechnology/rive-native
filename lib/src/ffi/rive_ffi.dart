@@ -2374,6 +2374,21 @@ class FFIRiveViewModelInstanceRuntime
     _pointer = nullptr;
   }
 
+  /// Transfers native ownership of this view model instance to C++ (e.g. to
+  /// [riveThreadedCreate]). Detaches the [NativeFinalizer] and nulls the
+  /// pointer so a subsequent [dispose] is a no-op. Read [pointer] BEFORE
+  /// calling this to capture the C++ handle. After this call the Dart object
+  /// is invalid and must not be used.
+  ///
+  /// The C++ handle remains valid as long as the caller keeps the underlying
+  /// ViewModelInstanceRuntime ref-counted (e.g. via
+  /// `riveThreadedRefViewModelInstance`).
+  void releaseNativeOwnership() {
+    if (_pointer == nullptr) return;
+    _finalizer.detach(this);
+    _pointer = nullptr;
+  }
+
   @override
   bool get isDisposed => _pointer == nullptr;
 }
@@ -2711,6 +2726,7 @@ class FFIStateMachine extends StateMachine
 
   @override
   bool advanceAndApply(double elapsedSeconds) {
+    if (pointer == nullptr) return false; // released via claimNativeOwnership
     _handleEvents();
     final result =
         _stateMachineInstanceAdvanceAndApply(pointer, elapsedSeconds);
@@ -2740,6 +2756,16 @@ class FFIStateMachine extends StateMachine
     _deleteStateMachineInstance(_pointer);
     _pointer = nullptr;
     _finalizer.detach(this);
+  }
+
+  /// Transfers native ownership of this state machine to C++ (e.g. to
+  /// [riveThreadedCreate]). Detaches the [NativeFinalizer] so Dart will not
+  /// free the object when it is GC-collected. After calling this, the Dart
+  /// object is invalid and must not be used.
+  void releaseNativeOwnership() {
+    if (_pointer == nullptr) return;
+    _finalizer.detach(this);
+    _pointer = nullptr;
   }
 
   @override
@@ -3221,14 +3247,26 @@ class FFIRiveArtboard extends Artboard
     _finalizer.detach(this);
   }
 
+  /// Transfers native ownership of this artboard to C++ (e.g. to
+  /// [riveThreadedCreate]). Detaches the [NativeFinalizer] so Dart will not
+  /// free the object when it is GC-collected. After calling this, the Dart
+  /// object is invalid and must not be used.
+  void releaseNativeOwnership() {
+    if (_pointer == nullptr) return;
+    _finalizer.detach(this);
+    _pointer = nullptr;
+  }
+
   @override
   void draw(Renderer renderer) {
+    if (pointer == nullptr) return; // released via claimNativeOwnership
     assert(riveFactory.isValidRenderer(renderer));
     _artboardDraw(pointer, (renderer as RiveFFIReference).pointer);
   }
 
   @override
   void drawInternal(Renderer renderer) {
+    if (pointer == nullptr) return;
     assert(riveFactory.isValidRenderer(renderer));
     _artboardDrawInternal(pointer, (renderer as RiveFFIReference).pointer);
   }

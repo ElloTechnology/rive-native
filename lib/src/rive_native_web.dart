@@ -147,6 +147,9 @@ base class _WebRenderTexture extends RenderTexture {
   dynamic get nativeTexture => null;
 
   @override
+  dynamic get nativeRendererPtr => null;
+
+  @override
   Renderer get renderer => WebRiveRenderer(jsRenderContextPtr, Factory.rive);
 
   @override

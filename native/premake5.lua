@@ -315,6 +315,8 @@ do
             links({ 'GLESv3', 'EGL', 'log', 'android' })
             files({
                 'platform/android/rive_native_android.cpp',
+                'src/threaded_scene_binding_android.cpp',
+                'include/dart/dart_api_dl.c',
             })
         end
 
