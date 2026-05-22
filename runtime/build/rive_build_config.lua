@@ -674,7 +674,12 @@ end
 if os.host() == 'macosx' then
     filter('system:ios')
     do
-        buildoptions({ '-fembed-bitcode ' })
+        -- ENG-5168: -fembed-bitcode embeds LLVM IR tagged with the producer's
+        -- LLVM version into every .o. CI runners with older Xcode/LLVM can't
+        -- parse newer-LLVM bitcode and fail with `Invalid bitcode version`.
+        -- Apple deprecated App Store bitcode submission in Xcode 14, so the
+        -- flag serves no purpose for distribution-linked .a files anymore.
+        -- buildoptions({ '-fembed-bitcode ' })
     end
 
     filter('system:macosx or system:ios')
