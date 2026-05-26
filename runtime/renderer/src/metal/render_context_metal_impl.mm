@@ -6,7 +6,10 @@
 
 #include "background_shader_compiler.h"
 #include "rive/renderer/buffer_ring.hpp"
+#ifdef RIVE_CANVAS
 #include "rive/renderer/render_canvas.hpp"
+#include "rive/renderer/ore/ore_context_metal.hpp"
+#endif
 #include "rive/renderer/texture.hpp"
 #include "rive/renderer/rive_render_buffer.hpp"
 #include "shaders/constants.glsl"
@@ -495,6 +498,20 @@ RenderContextMetalImpl::RenderContextMetalImpl(
 #endif
     m_platformFeatures.atomicPLSInitNeedsDraw = true;
 
+    // Texture compression support varies by Apple platform family.
+#if defined(RIVE_IOS) || defined(RIVE_XROS) || defined(RIVE_APPLETVOS) ||      \
+    defined(RIVE_IOS_SIMULATOR) || defined(RIVE_XROS_SIMULATOR) ||             \
+    defined(RIVE_APPLETVOS_SIMULATOR)
+    // iOS/tvOS/visionOS: ETC2 and ASTC are always supported.
+    m_platformFeatures.supportsTextureCompressionETC2 = true;
+    m_platformFeatures.supportsTextureCompressionASTC = true;
+#else
+    // macOS: BC is always supported; ASTC only on Apple Silicon.
+    m_platformFeatures.supportsTextureCompressionBC = true;
+    m_platformFeatures.supportsTextureCompressionASTC =
+        [m_gpu supportsFamily:MTLGPUFamilyApple1];
+#endif
+
 #if defined(RIVE_IOS) || defined(RIVE_XROS) || defined(RIVE_XROS_SIMULATOR) || \
     defined(RIVE_APPLETVOS) || defined(RIVE_APPLETVOS_SIMULATOR)
     // Atomic barriers are never used on iOS, but if we ever did need them, we
@@ -852,6 +869,7 @@ public:
     {}
 
     id<MTLTexture> texture() const { return m_texture; }
+    void* nativeHandle() const override { return (__bridge void*)m_texture; }
 
 private:
     id<MTLTexture> m_texture;
@@ -862,12 +880,20 @@ rcp<Texture> RenderContextMetalImpl::makeImageTexture(
     uint32_t width,
     uint32_t height,
     uint32_t mipLevelCount,
+    GPUTextureFormat format,
     const uint8_t imageDataRGBAPremul[])
 {
+    if (format != GPUTextureFormat::rgba32)
+    {
+        assert(!"unsupported format");
+        return nullptr;
+    }
+
     return make_rcp<TextureMetalImpl>(
         m_gpu, width, height, mipLevelCount, imageDataRGBAPremul);
 }
 
+#ifdef RIVE_CANVAS
 rcp<RenderCanvas> RenderContextMetalImpl::makeRenderCanvas(uint32_t width,
                                                            uint32_t height)
 {
@@ -896,6 +922,13 @@ rcp<RenderCanvas> RenderContextMetalImpl::makeRenderCanvas(uint32_t width,
     return make_rcp<RenderCanvas>(std::move(renderImage),
                                   std::move(renderTarget));
 }
+
+std::unique_ptr<rive::ore::Context> RenderContextMetalImpl::makeOreContext()
+{
+    assert(m_commandQueue);
+    return rive::ore::ContextMetal::Make(m_gpu, m_commandQueue);
+}
+#endif
 
 std::unique_ptr<BufferRing> RenderContextMetalImpl::makeUniformBufferRing(
     size_t capacityInBytes)
@@ -1097,6 +1130,30 @@ const RenderContextMetalImpl::DrawPipeline* RenderContextMetalImpl::
     }
 
     return pipelineIter->second.get();
+}
+
+void* RenderContextMetalImpl::makeCommandBuffer()
+{
+    if (m_commandQueue == nil)
+    {
+        return nullptr;
+    }
+    // __bridge_retained: transfers ARC ownership to the void* so it stays alive
+    // until commitCommandBuffer() releases it.
+    return (__bridge_retained void*)[m_commandQueue commandBuffer];
+}
+
+void RenderContextMetalImpl::commitCommandBuffer(void* commandBuffer)
+{
+    if (commandBuffer == nullptr)
+    {
+        return;
+    }
+    // __bridge_transfer: reclaims ARC ownership, balancing the
+    // __bridge_retained in makeCommandBuffer().
+    id<MTLCommandBuffer> mtlCmdBuffer =
+        (__bridge_transfer id<MTLCommandBuffer>)commandBuffer;
+    [mtlCmdBuffer commit];
 }
 
 void RenderContextMetalImpl::prepareToFlush(uint64_t nextFrameNumber,
@@ -1661,13 +1718,13 @@ void RenderContextMetalImpl::flush(const FlushDescriptor& desc)
 
             [encoder setFragmentSamplerState:m_imageSamplers[batch.imageSampler
                                                                  .asKey()]
-                                     atIndex:IMAGE_SAMPLER_IDX];
+                                     atIndex:IMAGE_TEXTURE_IDX];
         }
         else
         {
             [encoder setFragmentSamplerState:
                          m_imageSamplers[ImageSampler::LINEAR_CLAMP_SAMPLER_KEY]
-                                     atIndex:IMAGE_SAMPLER_IDX];
+                                     atIndex:IMAGE_TEXTURE_IDX];
         }
 
         // Issue any barriers if needed.

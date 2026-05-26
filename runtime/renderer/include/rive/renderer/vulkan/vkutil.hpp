@@ -22,6 +22,18 @@ class VulkanContext;
 
 namespace rive::gpu::vkutil
 {
+// Vulkan vendor IDs.
+namespace vendors
+{
+constexpr static uint32_t AMD = 0x1002u;
+constexpr static uint32_t Imagination = 0x1010u;
+constexpr static uint32_t NVIDIA = 0x10DEu;
+constexpr static uint32_t ARM = 0x13B5u;
+constexpr static uint32_t Qualcomm = 0x5143u;
+constexpr static uint32_t Intel = 0x8086u;
+constexpr static uint32_t Samsung = 0x144d;
+}; // namespace vendors
+
 const char* string_from_vk_result(VkResult);
 
 inline static void vk_check(VkResult res, const char* file, int line)
@@ -214,6 +226,7 @@ public:
         return m_imageView->vkImageViewAddressOf();
     }
     ImageAccess& lastAccess() { return m_lastAccess; }
+    void* nativeHandle() const override { return (void*)vkImage(); }
 
     // Deferred mechanism for uploading image data without a command buffer.
     void scheduleUpload(const void* imageDataRGBAPremul,

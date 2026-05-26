@@ -21,6 +21,8 @@
 #include "rive/animation/entry_state.hpp"
 #include "rive/animation/exit_state.hpp"
 #include "rive/animation/focus_action.hpp"
+#include "rive/animation/focus_action_target.hpp"
+#include "rive/animation/focus_action_traversal.hpp"
 #include "rive/animation/interpolating_keyframe.hpp"
 #include "rive/animation/keyed_object.hpp"
 #include "rive/animation/keyed_property.hpp"
@@ -112,6 +114,8 @@
 #include "rive/assets/image_asset.hpp"
 #include "rive/assets/manifest_asset.hpp"
 #include "rive/assets/script_asset.hpp"
+#include "rive/assets/shader_asset.hpp"
+#include "rive/assets/text_asset.hpp"
 #include "rive/audio_event.hpp"
 #include "rive/backboard.hpp"
 #include "rive/bones/bone.hpp"
@@ -230,6 +234,7 @@
 #include "rive/script_input_viewmodel_property.hpp"
 #include "rive/scripted/scripted_data_converter.hpp"
 #include "rive/scripted/scripted_drawable.hpp"
+#include "rive/scripted/scripted_interpolator.hpp"
 #include "rive/scripted/scripted_layout.hpp"
 #include "rive/scripted/scripted_path_effect.hpp"
 #include "rive/semantic/semantic_data.hpp"
@@ -460,6 +465,8 @@ public:
                 return new ScriptedDrawable();
             case ScriptedDataConverterBase::typeKey:
                 return new ScriptedDataConverter();
+            case ScriptedInterpolatorBase::typeKey:
+                return new ScriptedInterpolator();
             case ScriptedLayoutBase::typeKey:
                 return new ScriptedLayout();
             case ScriptedPathEffectBase::typeKey:
@@ -552,6 +559,8 @@ public:
                 return new KeyFrameString();
             case ListenerNumberChangeBase::typeKey:
                 return new ListenerNumberChange();
+            case FocusActionTargetBase::typeKey:
+                return new FocusActionTarget();
             case CubicEaseInterpolatorBase::typeKey:
                 return new CubicEaseInterpolator();
             case TransitionValueIdComparatorBase::typeKey:
@@ -564,8 +573,8 @@ public:
                 return new KeyFrameDouble();
             case KeyFrameColorBase::typeKey:
                 return new KeyFrameColor();
-            case FocusActionBase::typeKey:
-                return new FocusAction();
+            case FocusActionTraversalBase::typeKey:
+                return new FocusActionTraversal();
             case StateMachineBase::typeKey:
                 return new StateMachine();
             case StateMachineFireEventBase::typeKey:
@@ -598,10 +607,10 @@ public:
                 return new ListenerInputTypeEvent();
             case ListenerInputTypeKeyboardBase::typeKey:
                 return new ListenerInputTypeKeyboard();
-            case ListenerInputTypeSemanticBase::typeKey:
-                return new ListenerInputTypeSemantic();
             case ListenerInputTypeTextBase::typeKey:
                 return new ListenerInputTypeText();
+            case ListenerInputTypeSemanticBase::typeKey:
+                return new ListenerInputTypeSemantic();
             case ListenerInputTypeViewModelBase::typeKey:
                 return new ListenerInputTypeViewModel();
             case ExitStateBase::typeKey:
@@ -862,6 +871,8 @@ public:
                 return new ManifestAsset();
             case ImageAssetBase::typeKey:
                 return new ImageAsset();
+            case ShaderAssetBase::typeKey:
+                return new ShaderAsset();
             case FontAssetBase::typeKey:
                 return new FontAsset();
             case AudioAssetBase::typeKey:
@@ -1016,6 +1027,9 @@ public:
                 break;
             case ScriptedDataConverterBase::scriptAssetIdPropertyKey:
                 object->as<ScriptedDataConverterBase>()->scriptAssetId(value);
+                break;
+            case ScriptedInterpolatorBase::scriptAssetIdPropertyKey:
+                object->as<ScriptedInterpolatorBase>()->scriptAssetId(value);
                 break;
             case ScriptedPathEffectBase::scriptAssetIdPropertyKey:
                 object->as<ScriptedPathEffectBase>()->scriptAssetId(value);
@@ -1320,6 +1334,9 @@ public:
             case BlendState1DInputBase::inputIdPropertyKey:
                 object->as<BlendState1DInputBase>()->inputId(value);
                 break;
+            case FocusActionTargetBase::targetIdPropertyKey:
+                object->as<FocusActionTargetBase>()->targetId(value);
+                break;
             case TransitionValueIdComparatorBase::valuePropertyKey:
                 object->as<TransitionValueIdComparatorBase>()->value(value);
                 break;
@@ -1344,8 +1361,8 @@ public:
             case StateTransitionBase::randomWeightPropertyKey:
                 object->as<StateTransitionBase>()->randomWeight(value);
                 break;
-            case FocusActionBase::targetIdPropertyKey:
-                object->as<FocusActionBase>()->targetId(value);
+            case FocusActionTraversalBase::traversalKindPropertyKey:
+                object->as<FocusActionTraversalBase>()->traversalKind(value);
                 break;
             case StateMachineFireEventBase::eventIdPropertyKey:
                 object->as<StateMachineFireEventBase>()->eventId(value);
@@ -1739,8 +1756,8 @@ public:
             case FileAssetBase::cdnBaseUrlPropertyKey:
                 object->as<FileAssetBase>()->cdnBaseUrl(value);
                 break;
-            case ScriptAssetBase::folderPathPropertyKey:
-                object->as<ScriptAssetBase>()->folderPath(value);
+            case TextAssetBase::folderPathPropertyKey:
+                object->as<TextAssetBase>()->folderPath(value);
                 break;
         }
     }
@@ -1828,6 +1845,9 @@ public:
             case NestedArtboardBase::isPausedPropertyKey:
                 object->as<NestedArtboardBase>()->isPaused(value);
                 break;
+            case NestedArtboardBase::isStatefulPropertyKey:
+                object->as<NestedArtboardBase>()->isStateful(value);
+                break;
             case AxisBase::normalizedPropertyKey:
                 object->as<AxisBase>()->normalized(value);
                 break;
@@ -1904,9 +1924,6 @@ public:
                 break;
             case LayoutComponentBase::clipPropertyKey:
                 object->as<LayoutComponentBase>()->clip(value);
-                break;
-            case ArtboardBase::isStatefulPropertyKey:
-                object->as<ArtboardBase>()->isStateful(value);
                 break;
             case SemanticDataBase::isExpandablePropertyKey:
             {
@@ -2969,6 +2986,9 @@ public:
     {
         switch (propertyKey)
         {
+            case ViewModelInstanceTriggerBase::firePropertyKey:
+                object->as<ViewModelInstanceTriggerBase>()->fire(value);
+                break;
             case CustomPropertyTriggerBase::firePropertyKey:
                 object->as<CustomPropertyTriggerBase>()->fire(value);
                 break;
@@ -3079,6 +3099,8 @@ public:
                 return object->as<ScriptedDrawableBase>()->scriptAssetId();
             case ScriptedDataConverterBase::scriptAssetIdPropertyKey:
                 return object->as<ScriptedDataConverterBase>()->scriptAssetId();
+            case ScriptedInterpolatorBase::scriptAssetIdPropertyKey:
+                return object->as<ScriptedInterpolatorBase>()->scriptAssetId();
             case ScriptedPathEffectBase::scriptAssetIdPropertyKey:
                 return object->as<ScriptedPathEffectBase>()->scriptAssetId();
             case NestedArtboardLayoutBase::instanceWidthUnitsValuePropertyKey:
@@ -3304,6 +3326,8 @@ public:
                     ->opValue();
             case BlendState1DInputBase::inputIdPropertyKey:
                 return object->as<BlendState1DInputBase>()->inputId();
+            case FocusActionTargetBase::targetIdPropertyKey:
+                return object->as<FocusActionTargetBase>()->targetId();
             case TransitionValueIdComparatorBase::valuePropertyKey:
                 return object->as<TransitionValueIdComparatorBase>()->value();
             case StateTransitionBase::stateToIdPropertyKey:
@@ -3320,8 +3344,8 @@ public:
                 return object->as<StateTransitionBase>()->interpolatorId();
             case StateTransitionBase::randomWeightPropertyKey:
                 return object->as<StateTransitionBase>()->randomWeight();
-            case FocusActionBase::targetIdPropertyKey:
-                return object->as<FocusActionBase>()->targetId();
+            case FocusActionTraversalBase::traversalKindPropertyKey:
+                return object->as<FocusActionTraversalBase>()->traversalKind();
             case StateMachineFireEventBase::eventIdPropertyKey:
                 return object->as<StateMachineFireEventBase>()->eventId();
             case LinearAnimationBase::fpsPropertyKey:
@@ -3596,8 +3620,8 @@ public:
                 return object->as<AssetBase>()->name();
             case FileAssetBase::cdnBaseUrlPropertyKey:
                 return object->as<FileAssetBase>()->cdnBaseUrl();
-            case ScriptAssetBase::folderPathPropertyKey:
-                return object->as<ScriptAssetBase>()->folderPath();
+            case TextAssetBase::folderPathPropertyKey:
+                return object->as<TextAssetBase>()->folderPath();
         }
         return "";
     }
@@ -3665,6 +3689,8 @@ public:
                 return object->as<ScrollBarConstraintBase>()->autoSize();
             case NestedArtboardBase::isPausedPropertyKey:
                 return object->as<NestedArtboardBase>()->isPaused();
+            case NestedArtboardBase::isStatefulPropertyKey:
+                return object->as<NestedArtboardBase>()->isStateful();
             case AxisBase::normalizedPropertyKey:
                 return object->as<AxisBase>()->normalized();
             case LayoutComponentStyleBase::intrinsicallySizedValuePropertyKey:
@@ -3718,8 +3744,6 @@ public:
                 return object->as<CustomPropertyBooleanBase>()->propertyValue();
             case LayoutComponentBase::clipPropertyKey:
                 return object->as<LayoutComponentBase>()->clip();
-            case ArtboardBase::isStatefulPropertyKey:
-                return object->as<ArtboardBase>()->isStateful();
             case DataBindPathBase::isRelativePropertyKey:
                 return object->as<DataBindPathBase>()->isRelative();
             case BindablePropertyBooleanBase::propertyValuePropertyKey:
@@ -4248,6 +4272,7 @@ public:
             case SoloBase::activeComponentIdPropertyKey:
             case ScriptedDrawableBase::scriptAssetIdPropertyKey:
             case ScriptedDataConverterBase::scriptAssetIdPropertyKey:
+            case ScriptedInterpolatorBase::scriptAssetIdPropertyKey:
             case ScriptedPathEffectBase::scriptAssetIdPropertyKey:
             case NestedArtboardLayoutBase::instanceWidthUnitsValuePropertyKey:
             case NestedArtboardLayoutBase::instanceHeightUnitsValuePropertyKey:
@@ -4337,6 +4362,7 @@ public:
             case TransitionValueConditionBase::opValuePropertyKey:
             case TransitionViewModelConditionBase::opValuePropertyKey:
             case BlendState1DInputBase::inputIdPropertyKey:
+            case FocusActionTargetBase::targetIdPropertyKey:
             case TransitionValueIdComparatorBase::valuePropertyKey:
             case StateTransitionBase::stateToIdPropertyKey:
             case StateTransitionBase::flagsPropertyKey:
@@ -4345,7 +4371,7 @@ public:
             case StateTransitionBase::interpolationTypePropertyKey:
             case StateTransitionBase::interpolatorIdPropertyKey:
             case StateTransitionBase::randomWeightPropertyKey:
-            case FocusActionBase::targetIdPropertyKey:
+            case FocusActionTraversalBase::traversalKindPropertyKey:
             case StateMachineFireEventBase::eventIdPropertyKey:
             case LinearAnimationBase::fpsPropertyKey:
             case LinearAnimationBase::durationPropertyKey:
@@ -4474,7 +4500,7 @@ public:
             case TextValueRunBase::textPropertyKey:
             case AssetBase::namePropertyKey:
             case FileAssetBase::cdnBaseUrlPropertyKey:
-            case ScriptAssetBase::folderPathPropertyKey:
+            case TextAssetBase::folderPathPropertyKey:
                 return CoreStringType::id;
             case ViewModelInstanceColorBase::propertyValuePropertyKey:
             case CustomPropertyColorBase::propertyValuePropertyKey:
@@ -4501,6 +4527,7 @@ public:
             case ScrollConstraintBase::interactivePropertyKey:
             case ScrollBarConstraintBase::autoSizePropertyKey:
             case NestedArtboardBase::isPausedPropertyKey:
+            case NestedArtboardBase::isStatefulPropertyKey:
             case AxisBase::normalizedPropertyKey:
             case LayoutComponentStyleBase::intrinsicallySizedValuePropertyKey:
             case LayoutComponentStyleBase::linkCornerRadiusPropertyKey:
@@ -4526,7 +4553,6 @@ public:
             case FocusDataBase::canTraversePropertyKey:
             case CustomPropertyBooleanBase::propertyValuePropertyKey:
             case LayoutComponentBase::clipPropertyKey:
-            case ArtboardBase::isStatefulPropertyKey:
             case DataBindPathBase::isRelativePropertyKey:
             case BindablePropertyBooleanBase::propertyValuePropertyKey:
             case TextModifierRangeBase::clampPropertyKey:
@@ -4779,6 +4805,7 @@ public:
     {
         switch (propertyKey)
         {
+            case ViewModelInstanceTriggerBase::firePropertyKey:
             case CustomPropertyTriggerBase::firePropertyKey:
             case NestedTriggerBase::firePropertyKey:
             case EventBase::triggerPropertyKey:
@@ -4872,6 +4899,8 @@ public:
                 return object->is<ScriptedDrawableBase>();
             case ScriptedDataConverterBase::scriptAssetIdPropertyKey:
                 return object->is<ScriptedDataConverterBase>();
+            case ScriptedInterpolatorBase::scriptAssetIdPropertyKey:
+                return object->is<ScriptedInterpolatorBase>();
             case ScriptedPathEffectBase::scriptAssetIdPropertyKey:
                 return object->is<ScriptedPathEffectBase>();
             case NestedArtboardLayoutBase::instanceWidthUnitsValuePropertyKey:
@@ -5045,6 +5074,8 @@ public:
                 return object->is<TransitionViewModelConditionBase>();
             case BlendState1DInputBase::inputIdPropertyKey:
                 return object->is<BlendState1DInputBase>();
+            case FocusActionTargetBase::targetIdPropertyKey:
+                return object->is<FocusActionTargetBase>();
             case TransitionValueIdComparatorBase::valuePropertyKey:
                 return object->is<TransitionValueIdComparatorBase>();
             case StateTransitionBase::stateToIdPropertyKey:
@@ -5061,8 +5092,8 @@ public:
                 return object->is<StateTransitionBase>();
             case StateTransitionBase::randomWeightPropertyKey:
                 return object->is<StateTransitionBase>();
-            case FocusActionBase::targetIdPropertyKey:
-                return object->is<FocusActionBase>();
+            case FocusActionTraversalBase::traversalKindPropertyKey:
+                return object->is<FocusActionTraversalBase>();
             case StateMachineFireEventBase::eventIdPropertyKey:
                 return object->is<StateMachineFireEventBase>();
             case LinearAnimationBase::fpsPropertyKey:
@@ -5316,8 +5347,8 @@ public:
                 return object->is<AssetBase>();
             case FileAssetBase::cdnBaseUrlPropertyKey:
                 return object->is<FileAssetBase>();
-            case ScriptAssetBase::folderPathPropertyKey:
-                return object->is<ScriptAssetBase>();
+            case TextAssetBase::folderPathPropertyKey:
+                return object->is<TextAssetBase>();
             case ViewModelInstanceColorBase::propertyValuePropertyKey:
                 return object->is<ViewModelInstanceColorBase>();
             case CustomPropertyColorBase::propertyValuePropertyKey:
@@ -5365,6 +5396,8 @@ public:
             case ScrollBarConstraintBase::autoSizePropertyKey:
                 return object->is<ScrollBarConstraintBase>();
             case NestedArtboardBase::isPausedPropertyKey:
+                return object->is<NestedArtboardBase>();
+            case NestedArtboardBase::isStatefulPropertyKey:
                 return object->is<NestedArtboardBase>();
             case AxisBase::normalizedPropertyKey:
                 return object->is<AxisBase>();
@@ -5416,8 +5449,6 @@ public:
                 return object->is<CustomPropertyBooleanBase>();
             case LayoutComponentBase::clipPropertyKey:
                 return object->is<LayoutComponentBase>();
-            case ArtboardBase::isStatefulPropertyKey:
-                return object->is<ArtboardBase>();
             case SemanticDataBase::isExpandablePropertyKey:
                 return object->is<SemanticDataBase>();
             case SemanticDataBase::isSelectablePropertyKey:
@@ -5916,6 +5947,8 @@ public:
                 return object->is<DrawableAssetBase>();
             case ExportAudioBase::volumePropertyKey:
                 return object->is<ExportAudioBase>();
+            case ViewModelInstanceTriggerBase::firePropertyKey:
+                return object->is<ViewModelInstanceTriggerBase>();
             case CustomPropertyTriggerBase::firePropertyKey:
                 return object->is<CustomPropertyTriggerBase>();
             case NestedTriggerBase::firePropertyKey:

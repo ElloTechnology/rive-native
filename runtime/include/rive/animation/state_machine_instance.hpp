@@ -212,6 +212,9 @@ public:
         const StateTransition* transition,
         uint32_t propertyKey) const;
     bool hasListeners() { return m_hitComponents.size() > 0; }
+    bool hasFocusNodes();
+    bool focusNext();
+    bool focusPrevious();
     void clearDataContext();
     void relinkDataContext() override;
     void rebuildDataBind(DataBind*) override;
@@ -256,6 +259,21 @@ public:
 
     /// Set focus to a specific FocusData's node.
     void setFocus(FocusData* focusData);
+
+    /// Snapshot of the current focus state. Designed for host polling (e.g.
+    /// deciding whether to show a soft keyboard / IME). Cheap to query;
+    /// future fields (e.g. keyboard type) will be added additively.
+    struct FocusState
+    {
+        /// True if any element currently holds focus in this state machine's
+        /// active focus manager (internal or external).
+        bool hasFocus = false;
+        /// True if the focused element accepts keyboard input — i.e. a
+        /// TextInput, or a FocusData target with registered key/text-input
+        /// listeners. False when nothing is focused.
+        bool expectsKeyboardInput = false;
+    };
+    FocusState focusState() const;
 
     /// Get the semantic manager for this state machine instance.
     /// Returns the external manager if set, otherwise the internal one.
