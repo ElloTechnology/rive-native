@@ -19,6 +19,13 @@ typedef _CreateNative =
       Pointer<Void> viewModelInstance,
       Int32 width,
       Int32 height,
+      // Physical-pixel extent of the artboard layout frame the Fit transform
+      // is computed against. <= 0 means "fit against the full texture box"
+      // (legacy behavior). When the texture is oversized for overdraw, pass
+      // the layout-frame size so the artboard renders at the same scale as the
+      // synchronous path instead of being scaled up to cover the whole texture.
+      Int32 fitWidth,
+      Int32 fitHeight,
       Float devicePixelRatio,
       Int32 fit,
       Float alignmentX,
@@ -37,6 +44,8 @@ typedef _CreateDart =
       Pointer<Void> viewModelInstance,
       int width,
       int height,
+      int fitWidth,
+      int fitHeight,
       double devicePixelRatio,
       int fit,
       double alignmentX,
@@ -401,6 +410,13 @@ class RiveThreadedBindings {
     required Pointer<Void> viewModelInstance,
     required int width,
     required int height,
+    // Physical-pixel extent of the artboard layout frame the Fit transform is
+    // computed against. <= 0 fits against the full [width]x[height] texture box
+    // (legacy). Pass the layout-frame size (logical layout size × dpr) when the
+    // texture is oversized for overdraw so the artboard scale matches the sync
+    // path instead of covering the whole texture.
+    int fitWidth = 0,
+    int fitHeight = 0,
     required double devicePixelRatio,
     int fit = 1, // Fit.contain
     double alignmentX = 0.0,
@@ -418,6 +434,8 @@ class RiveThreadedBindings {
       viewModelInstance,
       width,
       height,
+      fitWidth,
+      fitHeight,
       devicePixelRatio,
       fit,
       alignmentX,

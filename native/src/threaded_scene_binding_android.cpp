@@ -56,6 +56,8 @@ public:
         rive::rcp<rive::ViewModelInstanceRuntime> viewModelInstance,
         int width,
         int height,
+        int fitWidth,
+        int fitHeight,
         float devicePixelRatio,
         rive::Fit fit,
         rive::Alignment alignment,
@@ -142,6 +144,8 @@ public:
             [renderTexturePtr,
              abWidth,
              abHeight,
+             fitW = static_cast<float>(fitWidth),
+             fitH = static_cast<float>(fitHeight),
              dpr,
              fit,
              alignment,
@@ -230,13 +234,31 @@ public:
                         1, std::memory_order_relaxed);
                     return nullptr;
                 }
-                // `w` / `h` are physical pixels (logical size × devicePixelRatio).
-                // computeAlignment() maps the artboard's content box into the
-                // frame's pixel box; no additional dpr multiplier is needed.
-                rive::AABB frame(0.0f,
-                                 0.0f,
-                                 static_cast<float>(w),
-                                 static_cast<float>(h));
+                // `w` / `h` are physical pixels (logical size × devicePixelRatio)
+                // and size the full render texture. `fitW` / `fitH` are the
+                // physical-pixel extent of the artboard's layout frame (the
+                // box the Fit transform is computed against). When the texture
+                // is larger than the layout frame — the overdraw case, where
+                // the texture fills an oversized panel so the artboard can draw
+                // past its frame — fitting against the whole texture would scale
+                // the artboard up to cover it. Fit against the layout frame
+                // instead, positioned within the texture by `alignment` (the
+                // same anchor the overflow panel uses), so the on-screen scale
+                // matches the synchronous path while overdraw still spills into
+                // the surrounding texture. `fitW`/`fitH` <= 0 falls back to the
+                // full texture box (no decoupling requested).
+                float frameW = fitW > 0.0f ? fitW : static_cast<float>(w);
+                float frameH = fitH > 0.0f ? fitH : static_cast<float>(h);
+                float frameX =
+                    (1.0f + alignment.x()) * 0.5f *
+                    (static_cast<float>(w) - frameW);
+                float frameY =
+                    (1.0f + alignment.y()) * 0.5f *
+                    (static_cast<float>(h) - frameH);
+                rive::AABB frame(frameX,
+                                 frameY,
+                                 frameX + frameW,
+                                 frameY + frameH);
                 rive::AABB content(0.0f, 0.0f, abWidth, abHeight);
                 rive::Mat2D transform =
                     rive::computeAlignment(fit, alignment, frame, content);
@@ -465,6 +487,8 @@ EXPORT void* riveThreadedCreate(
     void* viewModelInstancePtr,
     int width,
     int height,
+    int fitWidth,
+    int fitHeight,
     float devicePixelRatio,
     int fit,
     float alignmentX,
@@ -499,6 +523,8 @@ EXPORT void* riveThreadedCreate(
         std::move(vmi),
         width,
         height,
+        fitWidth,
+        fitHeight,
         devicePixelRatio,
         static_cast<rive::Fit>(fit),
         rive::Alignment(alignmentX, alignmentY),
